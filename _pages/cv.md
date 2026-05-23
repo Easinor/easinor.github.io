@@ -41,7 +41,7 @@ Cumulative GPA: 3.7/4.0
 
 
 - **Parallel Huffman Tree:** Studied and implemented the first publicly available parallel algorithm for constructing huffman tree using C++, achieving 10--20x speedups compared to the SOTA sequential baseline. Published in SPAA’22.
-  [GitHub Repo](https://github.com/Easinal/huff_para)
+  [GitHub Repo](https://github.com/Easinor/huff_para)
   [arXiv](https://arxiv.org/abs/2205.13077)
 
 
