@@ -68,7 +68,15 @@ window.DOLL = window.DOLL || {};
       W: VW, H: VH, floorY: floorY, catY: catY,
       win: { x: Math.round(VW * 0.60), y: Math.round(VH * 0.13), w: winW, h: winH },
       // 三层猫爬架：两层小平台 + 顶上的大垫子（数值是平台面的 y，猫的脚就踩在这）
-      tree: { x: Math.round(VW * 0.53), tiers: [floorY - 21, floorY - 41], top: floorY - 62 },
+      // 猫爬架贴着窗户左边放（宽 58、高 70）。spots = 猫能落脚的三个地方，从低到高（数值是台面的 y，猫的脚就踩在这）：
+      // 猫屋的屋顶、左边的跳板、最顶上的软垫。link = 能和窗台互相跳的那一个（屋顶）
+      tree: (function () {
+        const tx = Math.max(40, Math.round(VW * 0.60) - 26);
+        return {
+          x: tx, link: 0,
+          spots: [{ x: tx + 14, y: floorY - 31 }, { x: tx - 17, y: floorY - 46 }, { x: tx + 14, y: floorY - 70 }]
+        };
+      })(),
       // 窗台：猫趴在窗台上看风景；上去要先跳到砂盆的靠背上（step），再跳上窗台
       sill: { x: Math.round(VW * 0.60 + winW * 0.42), y: Math.round(VH * 0.13) + winH + 5 },
       step: { x: litter.x - 2, y: litter.y - 23 },
@@ -83,7 +91,7 @@ window.DOLL = window.DOLL || {};
   // ---------- 窗 ----------
   // 窗外的三套风景：点一下窗户换一套
   const VIEWS = ['mountain', 'city', 'village'];
-  const VIEW_NAMES = { mountain: 'Mountains', city: 'City', village: 'Village' };
+  const VIEW_NAMES = { mountain: 'Snow Mountains', city: 'City', village: 'Village' };
   S.viewNow = function () {
     const v = D.St && D.St.settings && D.St.settings.view;
     return VIEWS.indexOf(v) >= 0 ? v : 'mountain';
@@ -98,30 +106,74 @@ window.DOLL = window.DOLL || {};
     return x >= w.x && x < w.x + w.w && y >= w.y && y < w.y + w.h;
   };
 
-  // 山脉：远处一排带雪顶的尖峰，近处一道绿坡
-  function viewMountain(ctx, w, t, N) {
-    const base = w.y + w.h;
-    const peaks = [[0.14, 0.46], [0.46, 0.64], [0.80, 0.42], [1.04, 0.34]];
-    const rock = N ? '#313D64' : '#8FA5C6', rockD = N ? '#283358' : '#7389B0', snow = N ? '#98A4CA' : '#F6FAFF';
-    for (let i = 0; i < w.w; i++) {
-      let h = 0, top = 0, px = 0;
-      for (const p of peaks) {
-        const v = p[1] * w.h - Math.abs(i - p[0] * w.w) * 0.95;
-        if (v > h) { h = v; top = p[1] * w.h; px = p[0] * w.w; }
+  // 雪山：几座又宽又尖的大山，山体是被太阳照成橙红的岩面（一侧亮橙、一侧深橙红，带斜着的色块），
+  // 山顶一截冰蓝的雪盖、下沿参差；山前两排深紫色的冷杉剪影，最底下一条雪地。
+  // 这一幅是逐像素画的，画一次存成小画布，之后每帧直接贴（窗户大小或昼夜变了才重画）
+  const mountain = { key: '', cv: null };
+  function buildMountain(W, H, N) {
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const g = cv.getContext('2d');
+    const c = (day, night) => (N ? night : day);
+    const dot = (x, y, w, h, col) => { g.fillStyle = col; g.fillRect(x, y, w, h); };
+    const rockL = c('#F7A254', '#4A4478'), rockD = c('#EC6A40', '#383262');
+    const rockLd = c('#F08A48', '#423C6E'), rockDl = c('#F2824A', '#403A6C');
+    const snowL = c('#EEF5FC', '#A9B6DC'), snowD = c('#A9C4E2', '#7482AE');
+    // [峰顶的横向位置, 高度（占窗高）, 坡度]
+    const peaks = [[0.10, 0.50, 0.95], [0.33, 0.44, 1.05], [0.57, 0.80, 0.92], [0.92, 0.52, 1.0]];
+    for (let i = 0; i < W; i++) {
+      let h = 0, pk = -1;
+      for (let k = 0; k < peaks.length; k++) {
+        const v = peaks[k][1] * H - Math.abs(i - peaks[k][0] * W) * peaks[k][2];
+        if (v > h) { h = v; pk = k; }
       }
-      h = Math.round(h + Math.sin(i * 0.9) * 0.8);
-      if (h <= 0) continue;
-      PX.rect(ctx, w.x + i, base - h, 1, h, i > px ? rockD : rock);
-      const cap = Math.round(7 - (top - h)) - (i % 2);
-      if (cap > 0) PX.rect(ctx, w.x + i, base - h, 1, cap, snow);
+      h = Math.round(h);
+      if (h <= 0 || pk < 0) continue;
+      const top = peaks[pk][1] * H, px = peaks[pk][0] * W;
+      for (let e = h - 1; e >= 0; e--) {            // e = 这个像素离地多高
+        const depth = top - e;                       // 离峰顶往下多远
+        // 山脊线从峰顶往下稍稍偏右、带点折：左边向阳、右边背阴
+        const lit = i < px + depth * 0.18 + 2 * Math.sin(depth * 0.45 + pk);
+        // 雪盖：峰顶往下约三成，下沿一齿一齿的
+        const capEdge = top * 0.30 + 2.5 * Math.sin(i * 0.8 + pk * 2) + (U.hash(i * 2.1 + pk * 9) > 0.7 ? 3 : 0);
+        let col;
+        if (depth < capEdge) col = lit ? snowL : snowD;
+        else {
+          // 岩面上斜着的色块
+          const band = Math.floor((i * (lit ? 0.9 : -0.9) + e * 1.1) / 6);
+          const patch = U.hash(band * 5.3 + pk * 17 + (lit ? 0 : 40));
+          col = lit ? (patch > 0.62 ? rockLd : rockL) : (patch > 0.7 ? rockDl : rockD);
+        }
+        dot(i, H - 1 - e, 1, 1, col);
+      }
     }
-    const hill = N ? '#2C3A5E' : '#9AC0A4', hill2 = N ? '#22304E' : '#7FA98C';
-    for (let i = 0; i < w.w; i++) {
-      const h1 = Math.round(7 + 4 * Math.sin(i * 0.22) + 3 * Math.sin(i * 0.07));
-      const h2 = Math.round(4 + 3 * Math.sin(i * 0.15 + 2));
-      PX.rect(ctx, w.x + i, base - h1, 1, h1, hill);
-      PX.rect(ctx, w.x + i, base - h2, 1, h2, hill2);
+    // 冷杉剪影：一层一层越往下越宽
+    const fir = (x, ground, hgt, col) => {
+      dot(x, ground - 2, 1, 2, col);
+      for (let r = 0; r < hgt; r++) {
+        const tier = r % 4, grow = Math.floor(r / 4);
+        const half = Math.min(1 + grow + Math.floor(tier * 0.75), 1 + Math.floor(hgt / 3.2));
+        dot(x - half, ground - 2 - hgt + r, half * 2 + 1, 1, col);
+      }
+      dot(x, ground - 3 - hgt, 1, 1, col);
+    };
+    const ground = H - 4;
+    for (let k = 0, x = 2; x < W; k++, x += 6 + Math.floor(U.hash(k * 3.9 + 1) * 6)) {      // 后排：高一些、颜色浅一点
+      fir(x, ground, 11 + Math.floor(U.hash(k * 7.3 + 2) * 9), c('#4A3C84', '#221E4A'));
     }
+    for (let k = 0, x = 5; x < W; k++, x += 5 + Math.floor(U.hash(k * 5.1 + 8) * 6)) {      // 前排：矮一些、更深
+      fir(x, ground + 1, 7 + Math.floor(U.hash(k * 8.7 + 5) * 6), c('#2E2259', '#141230'));
+    }
+    // 雪地：一条白，边上冒几撮雪里的草尖
+    dot(0, ground, W, H - ground, c('#F6FAFE', '#5A6490'));
+    dot(0, ground, W, 1, c('#DCE8F6', '#48527C'));
+    for (let x = 1; x < W; x += 3) if (U.hash(x * 1.7) > 0.45) dot(x, ground - 1, 1, 1, c('#F6FAFE', '#5A6490'));
+    return cv;
+  }
+  function viewMountain(ctx, w, t, N) {
+    const key = w.w + 'x' + w.h + (N ? 'n' : 'd');
+    if (mountain.key !== key) { mountain.key = key; mountain.cv = buildMountain(w.w, w.h, N); }
+    ctx.drawImage(mountain.cv, w.x, w.y);
   }
 
   // 高楼大厦：前后两排楼。白天窗户只是玻璃、一动不动；只有晚上才亮灯，
@@ -528,62 +580,53 @@ window.DOLL = window.DOLL || {};
     PX.rect(ctx, x + 32, y - 6, 1, 2, '#7FB27A');
   }
 
-  // 三层猫爬架：麻绳柱 + 左右错开的两层小平台 + 顶上一张大软垫（Luna 的专座），挂一个绒球
+  // 猫爬架（干净的三段式）：右边一个带拱门和爪印的大猫屋，屋顶是第一层；
+  // 左边一根柱子撑着第二层跳板；猫屋顶上的高柱子通到最上面的软垫，垫子底下吊一个绒球。
+  // 猫能落脚的三个地方记在 L.tree.spots 里（从低到高），画的位置要和它对上。
   function drawCatTree(ctx, L, t, night) {
-    const T = L.tree, x = T.x, base = L.floorY;
+    const T = L.tree, x = T.x, base = L.floorY - 4;   // 底座垫在踢脚线上面，不然被踢脚线挡住
     const rope = night ? '#8E7A66' : '#D8BE92', ropeD = night ? '#76634F' : '#BFA176';
     const pad = night ? '#6E6288' : '#B9A6D6', padD = night ? '#5B5074' : '#9C88BE';
-    const padL = night ? '#857AA0' : '#E3D6F0';
-    PX.ellipse(ctx, x, base + 1, 17, 3, 'rgba(60,44,66,.25)');
-    // 底座
-    PX.rect(ctx, x - 15, base - 4, 30, 5, pad);
-    PX.rect(ctx, x - 15, base, 30, 1, padD);
-    // 主麻绳柱通到顶
-    for (let y = T.top + 3; y < base - 4; y++) PX.rect(ctx, x - 2, y, 5, 1, (y % 3 === 0) ? ropeD : rope);
-    // 第一层底下是个小猫屋：圆门洞、门上一圈浅色边
-    const cx0 = x - 19, cy0 = T.tiers[0] + 3, cw = 21, ch = base - 4 - cy0;
-    PX.rect(ctx, cx0, cy0, cw, ch, pad);
-    PX.rect(ctx, cx0, cy0, 1, ch, padL);
-    PX.rect(ctx, cx0 + cw - 1, cy0, 1, ch, padD);
-    PX.ellipse(ctx, cx0 + 10, cy0 + Math.round(ch * 0.58), 6, 6, padL);
-    PX.ellipse(ctx, cx0 + 10, cy0 + Math.round(ch * 0.58), 5, 5, night ? '#2E2640' : '#5B4E70');
-    PX.rect(ctx, cx0 + 4, cy0 + ch - 3, 13, 3, pad);
-    // 平台：浅色毛毯面 + 毛茸茸的边
-    const plat = (cx, y, w) => {
-      PX.rect(ctx, cx - (w >> 1), y, w, 3, pad);
-      PX.rect(ctx, cx - (w >> 1), y, w, 1, padL);
-      PX.rect(ctx, cx - (w >> 1), y + 3, w, 1, padD);
-      for (let i = 1; i < w; i += 3) PX.rect(ctx, cx - (w >> 1) + i, y + 4, 1, 1, padD);
+    const padL = night ? '#857AA0' : '#E3D6F0', hole = night ? '#2E2640' : '#5B4E70';
+    // 下面的坐标都相对「爬架中线、地板」：dx 往右为正，dy 往上为负
+    const R = (dx, dy, w, h, c) => PX.rect(ctx, x + dx, base + dy, w, h, c);
+    const post = (dx, y0, y1, w) => { for (let y = y0; y < y1; y++) R(dx, y, w, 1, (((y % 3) + 3) % 3 === 0) ? ropeD : rope); };
+    // 跳板：浅色毛毯面 + 毛茸茸的边
+    const plat = (dx, dy, w) => {
+      R(dx, dy, w, 3, pad); R(dx, dy, w, 1, padL); R(dx, dy + 3, w, 1, padD);
+      for (let i = 1; i < w; i += 3) R(dx + i, dy + 4, 1, 1, padD);
     };
-    plat(x - 9, T.tiers[0], 24);
-    plat(x + 8, T.tiers[1], 22);
-    // 第二层底下吊一个小吊床
-    const hx0 = x + 3, hx1 = x + 19, hy = T.tiers[1] + 4;
-    PX.line(ctx, hx0, hy, hx0 + 1, hy + 4, ropeD); PX.line(ctx, hx1, hy, hx1 - 1, hy + 4, ropeD);
-    for (let i = 0; i <= hx1 - hx0 - 2; i++) {
-      const k = i / (hx1 - hx0 - 2);
-      const sag = Math.round(Math.sin(k * Math.PI) * 4);
-      PX.rect(ctx, hx0 + 1 + i, hy + 4 + sag, 1, 2, i % 4 < 2 ? '#F4B6C2' : '#FBD6DE');
+
+    PX.ellipse(ctx, x, base + 1, 31, 3, 'rgba(60,44,66,.25)');
+    // 底座
+    R(-29, -3, 58, 4, pad); R(-29, -3, 58, 1, padL); R(-29, 0, 58, 1, padD);
+    // 两根麻绳柱：左边矮的撑着第二层，右边高的从猫屋顶通到软垫
+    post(-19, -42, -3, 4);
+    post(12, -64, -27, 5);
+    // 大猫屋：拱形门洞（一圈浅色边）+ 爪印
+    R(0, -24, 28, 21, pad);
+    R(0, -24, 1, 21, padL); R(27, -24, 1, 21, padD);
+    PX.ellipse(ctx, x + 9, base - 10, 6, 6, padL); R(3, -10, 13, 7, padL);
+    PX.ellipse(ctx, x + 9, base - 10, 5, 5, hole); R(4, -10, 11, 7, hole);
+    R(18, -17, 2, 2, padD); R(21, -18, 2, 2, padD); R(24, -17, 2, 2, padD);
+    R(19, -14, 6, 3, padD); R(20, -11, 4, 1, padD);
+    // 第一层：猫屋的屋顶（落脚点 0）
+    plat(-2, -27, 32);
+    // 第二层：左边的跳板（落脚点 1）
+    plat(-29, -42, 24);
+    // 顶上的软垫（落脚点 2，Luna 的专座）：厚垫子 + 一圈蓬蓬的毛边 + 两只小猫耳朵
+    R(-1, -64, 30, 3, padD);
+    R(-2, -66, 32, 3, pad);
+    R(2, -65, 24, 1, padL);
+    for (let i = -1; i <= 28; i += 2) R(i, -67 - ((i >> 1) & 1), 2, 1, padL);
+    for (const ex of [2, 26]) {
+      for (let i = 0; i < 4; i++) R(ex - (3 - i), -71 + i, (3 - i) * 2 + 1, 1, pad);
+      R(ex, -69, 1, 2, '#F7C3CC');
     }
-    // 顶层：带猫耳朵的圆窝，一圈蓬蓬的毛边
-    PX.rect(ctx, x - 16, T.top, 32, 4, padD);
-    PX.rect(ctx, x - 17, T.top - 2, 34, 3, pad);
-    PX.rect(ctx, x - 13, T.top - 1, 26, 2, padL);
-    for (let i = -16; i <= 15; i += 2) PX.rect(ctx, x + i, T.top - 3 - ((i >> 1) & 1), 2, 1, padL);
-    for (const s of [-1, 1]) {
-      const ex = x + s * 13;
-      for (let i = 0; i < 4; i++) PX.rect(ctx, ex - (3 - i) + (s > 0 ? 0 : 0), T.top - 7 + i, (3 - i) * 2 + 1, 1, pad);
-      PX.rect(ctx, ex, T.top - 5, 1, 2, '#F7C3CC');
-    }
-    // 第一层边上挂的绒球、顶上挂的小鱼
+    // 第二层边上吊一个绒球
     const sw = Math.round(Math.sin(t * 1.3) * 1.5);
-    PX.line(ctx, x - 20, T.tiers[0] + 3, x - 20 + sw, T.tiers[0] + 10, night ? '#2B2438' : '#8C7A6E');
-    PX.ellipse(ctx, x - 20 + sw, T.tiers[0] + 12, 2, 2, night ? '#B07C9A' : '#F48FB1');
-    const sw2 = Math.round(Math.sin(t * 1.1 + 1) * 1.5);
-    PX.line(ctx, x + 16, T.top + 3, x + 16 + sw2, T.top + 12, night ? '#2B2438' : '#8C7A6E');
-    PX.rect(ctx, x + 14 + sw2, T.top + 13, 5, 3, night ? '#6C8FB0' : '#8EC3E6');
-    PX.rect(ctx, x + 19 + sw2, T.top + 12, 1, 1, night ? '#6C8FB0' : '#8EC3E6');
-    PX.rect(ctx, x + 19 + sw2, T.top + 15, 1, 1, night ? '#6C8FB0' : '#8EC3E6');
+    PX.line(ctx, x - 27, base - 38, x - 27 + sw, base - 30, night ? '#2B2438' : '#8C7A6E');
+    PX.ellipse(ctx, x - 27 + sw, base - 28, 2, 2, night ? '#B07C9A' : '#F48FB1');
   }
 
   // 猫跑轮：part='back' 在猫之前画（支架、背板、跑道、辐条），

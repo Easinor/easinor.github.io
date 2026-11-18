@@ -119,13 +119,6 @@ body.tool-active #stage { cursor: none; }
 #account .err { min-height: 14px; font-size: 11px; color: #C2506E; }
 #account .row { display: flex; justify-content: space-between; gap: 8px; margin: 5px 0; }
 #account .row span { color: var(--ink-soft); text-align: right; }
-#account .miles { display: flex; gap: 5px; margin: 9px 0 2px; }
-#account .miles i {
-  flex: 1; text-align: center; padding: 5px 0;
-  font-style: normal; font-weight: 700; font-size: 11px;
-  color: var(--ink-soft); background: #EEE4EC; border: 1px solid var(--edge-soft);
-}
-#account .miles i.got { color: #fff; background: var(--accent); border-color: var(--accent); }
 #account .chip { width: 100%; margin-top: 4px; }
 body.mini #account { display: none; }
 

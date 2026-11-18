@@ -69,20 +69,42 @@ window.DOLL = window.DOLL || {};
       const a = G[k]; G[k] = G2[k]; G2[k] = a;
     }
   }
-  Game.switchCat = function (id) {
+  // quiet：悄悄换（逗猫棒吸引到另一只时用），不清场上的特效、不打招呼
+  Game.switchCat = function (id, quiet) {
     if (G.catId !== id) {
       if (G2.catId === id) swapCats();
       else G.catId = id;
     }
     G2.catId = G.catId === 'luna' ? 'nova' : 'luna';
     St.cat = id;
-    FX.clear();
     G.paused = false;
     if (!G.beh) AI.start(G, 'stretch');
-    FX.say(U.pick(['Here I am~', 'Meow.', D.CATS[id].name + ' is here']), { dur: 2.4 });
+    if (!quiet) {
+      FX.clear();
+      FX.say(U.pick(['Here I am~', 'Meow.', D.CATS[id].name + ' is here']), { dur: 2.4 });
+    }
     UI.syncTools();
     St.save();
   };
+
+  // 逗猫棒离哪只猫近，哪只就被吸引过来玩：另一只明显更近、并且持续半秒以上，就换成它来追。
+  // 睡着的、在吃饭喝水的、在上厕所的、在跑轮里的、正在半空跳的不叫；正在追的那只跳到一半时也不换。
+  const WAND_BUSY = { sleep: 1, pairSleep: 1, useLitter: 1, hopDown: 1, perch: 1, wheel: 1, goEat: 1, goDrink: 1 };
+  let wandSwitchT = 0;
+  function wandAttract(dt) {
+    const w = Game.wand;
+    if (!w.on || G.tool !== 'wand' || !Game.showScene || G.chaseHops) { wandSwitchT = 0; return; }
+    const dist = (cat) => Math.hypot(w.x - cat.x, w.y - (cat.y - 12));
+    const other = G2, busy = !other.beh || WAND_BUSY[other.beh.name] || other.hopping;
+    const tired = (St.data[other.catId] || {}).energy <= 10;
+    if (busy || tired || dist(other) + 16 >= dist(G)) { wandSwitchT = 0; return; }
+    wandSwitchT += dt;
+    if (wandSwitchT < 0.5) return;
+    wandSwitchT = 0;
+    Game.switchCat(other.catId, true);      // 对调之后 G 就是离得近的那只
+    AI.start(G, 'chase');                   // 原来追的那只（现在是 G2）下一帧自己会停下来
+  }
+  Game.wandAttract = wandAttract;
 
   Game.resize = function () {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -217,6 +239,7 @@ window.DOLL = window.DOLL || {};
     Game.showScene = showScene;
     const L = G.L;
 
+    wandAttract(dt);
     if (!G.paused) AI.update(G, dt);
     Act.tick(G, dt);
     AI.animate(G, G.t, dt);

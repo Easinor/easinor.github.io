@@ -59,8 +59,7 @@ window.DOLL = window.DOLL || {};
   AI.perchPath = function (G, name) {
     const L = G.L;
     if (name === 'tree' && L.tree) {
-      const T = L.tree;
-      return [{ x: T.x - 9, y: T.tiers[0] }, { x: T.x + 8, y: T.tiers[1] }, { x: T.x, y: T.top }];
+      return L.tree.spots;   // 猫屋的屋顶 → 左边的跳板 → 顶上的软垫
     }
     // 窗台：先跳到砂盆的靠背上垫一步，再跳上窗台
     if (name === 'sill' && L.sill) {
@@ -70,7 +69,9 @@ window.DOLL = window.DOLL || {};
   };
   AI.perchPoint = function (G) {
     const p = G.onPerch && AI.perchPath(G, G.onPerch);
-    return p ? p[p.length - 1] : null;
+    if (!p) return null;
+    // 追逗猫棒时可以停在半路的跳点上（爬架的下面两层、砂盆顶上），记在 perchAt 里；平时就是最顶上那个
+    return p[G.perchAt != null ? Math.min(G.perchAt, p.length - 1) : p.length - 1];
   };
   function otherCats(G) { return (D.Game && D.Game.cats || []).filter(o => o !== G); }
   function freePerch(G, name) { return !otherCats(G).some(o => o.onPerch === name || o.perchGoal === name); }
@@ -415,12 +416,132 @@ window.DOLL = window.DOLL || {};
     }
   };
 
+  // ---------- 逗猫棒：举到高处，猫会跟着跳上去 ----------
+  // 能落脚的地方用 [哪条路, 第几个跳点] 表示（就是 perchPath 里的下标）：
+  //   爬架上的三个 ['tree', 0..2]，砂盆顶上 ['sill', 0]，窗台 ['sill', 1]
+  // 逗猫棒举起来的时候，猫跳到离逗猫棒最近的那个落脚点。
+  function allSpots(G) {
+    const out = [];
+    for (const name of ['tree', 'sill']) {
+      const p = AI.perchPath(G, name);
+      if (p) for (let i = 0; i < p.length; i++) out.push([name, i]);
+    }
+    return out;
+  }
+  const lastIdx = (G, name) => { const p = AI.perchPath(G, name); return p ? p.length - 1 : -1; };
+  function spotPos(G, s) { const p = AI.perchPath(G, s[0]); return p && p[s[1]] ? p[s[1]] : null; }
+  function sameSpot(a, b) { return a && b ? a[0] === b[0] && a[1] === b[1] : !a && !b; }
+  // 猫现在在哪个落脚点上（在地上是 null）。平时待在高处不记 perchAt，就是最顶上那个
+  function curSpot(G) {
+    if (!G.onPerch) return null;
+    const last = lastIdx(G, G.onPerch);
+    return [G.onPerch, G.perchAt != null ? Math.min(G.perchAt, last) : last];
+  }
+  // 另一只猫没占着这个落脚点（它正往那个高处去也算占着顶上那个）
+  function spotFree(G, s) {
+    const last = lastIdx(G, s[0]);
+    return !otherCats(G).some(o => {
+      const c = curSpot(o);
+      return (c && sameSpot(c, s)) || (o.perchGoal === s[0] && s[1] === last);
+    });
+  }
+  // 逗猫棒指着哪个落脚点：举得够高、60 像素以内最近的那个；没有就是 null（留在地上）
+  function wandSpot(G, w) {
+    const L = G.L;
+    if (!(D.Game && D.Game.showScene) || w.y > L.floorY - 8) return null;
+    let best = null, bd = 60;
+    for (const s of allSpots(G)) {
+      const p = spotPos(G, s);
+      if (!p || !spotFree(G, s)) continue;
+      let px = p.x, dy = w.y - (p.y - 10);
+      // 窗台是一长条：逗猫棒在窗户前面哪儿都算挨着窗台，举得高一点也算
+      if (s[0] === 'sill' && s[1] === lastIdx(G, 'sill') && L.win) {
+        px = U.clamp(w.x, L.win.x, L.win.x + L.win.w);
+        if (dy < 0) dy *= 0.4;
+      }
+      const d = Math.hypot(w.x - px, dy);
+      if (d < bd) { bd = d; best = s; }
+    }
+    return best;
+  }
+  // 落脚点之间能直接跳的：同一条路上相邻的两个，外加爬架上挨着窗户的那一个 ↔ 窗台
+  function spotNeighbors(G, s) {
+    const out = [];
+    if (s[1] > 0) out.push([s[0], s[1] - 1]);
+    if (s[1] < lastIdx(G, s[0])) out.push([s[0], s[1] + 1]);
+    const sillTop = lastIdx(G, 'sill'), T = G.L.tree;
+    const link = T && T.link != null ? T.link : 1;
+    if (sillTop >= 0 && lastIdx(G, 'tree') >= link) {
+      if (s[0] === 'tree' && s[1] === link) out.push(['sill', sillTop]);
+      if (s[0] === 'sill' && s[1] === sillTop) out.push(['tree', link]);
+    }
+    return out;
+  }
+  // 在高处从 from 到 to 最少跳几下（不含 from、含 to）
+  function spotPath(G, from, to) {
+    if (sameSpot(from, to)) return [];
+    const key = (s) => s[0] + s[1];
+    const seen = {}, queue = [{ s: from, path: [] }];
+    seen[key(from)] = 1;
+    while (queue.length) {
+      const cur = queue.shift();
+      for (const n of spotNeighbors(G, cur.s)) {
+        if (seen[key(n)]) continue;
+        seen[key(n)] = 1;
+        const path = cur.path.concat([n]);
+        if (sameSpot(n, to)) return path;
+        queue.push({ s: n, path: path });
+      }
+    }
+    return null;
+  }
+  // 去 goal 要怎么跳。已经在高处：直接在高处之间跳过去，不下地。
+  // 在地上：两条上去的路，看离哪条的起点近——靠左、靠爬架就从爬架上，否则踩着砂盆上。
+  // 返回 { base: 地上的起跳点（已经在高处时没有）, hops: [跳点…] }
+  function wandRoute(G, goal) {
+    const L = G.L, here = curSpot(G);
+    const pts = (list) => list.map(s => { const p = spotPos(G, s); return { x: p.x, y: p.y }; });
+    if (here) { const p = spotPath(G, here, goal); return p ? { hops: pts(p) } : null; }
+    const tp = AI.perchPath(G, 'tree'), sp = AI.perchPath(G, 'sill');
+    const treeBase = tp && { x: U.clamp(tp[0].x - 16, 16, L.W - 16), y: AI.clampY(L, L.floorY + 7) };
+    const litBase = sp && sp.length > 1 && { x: U.clamp(sp[0].x - 26, 16, L.W - 16), y: AI.clampY(L, L.litter.y + 6) };
+    if (!treeBase && !litBase) return null;
+    const viaTree = !litBase || (treeBase && Math.abs(G.x - treeBase.x) <= Math.abs(G.x - litBase.x));
+    const entry = viaTree ? ['tree', 0] : ['sill', 0];
+    const rest = spotPath(G, entry, goal);
+    return rest ? { base: viaTree ? treeBase : litBase, hops: pts([entry].concat(rest)) } : null;
+  }
+  function landOn(G, spot) {
+    G.onPerch = spot ? spot[0] : null;
+    G.perchAt = spot ? spot[1] : null;
+  }
+  // 跳到一半被别的事打断（比如开饭了）：直接落到这一串跳点的终点，不留在半空
+  function finishWandHop(G) {
+    if (!G.chaseHops) return;
+    const last = G.hops && G.hops.length ? G.hops[G.hops.length - 1] : null;
+    if (last) { G.x = last.x; G.y = last.y; if (!G.chaseLand) G.gy = AI.clampY(G.L, last.y); }
+    G.hops = []; G.hopFrom = null; G.hopping = false;
+    landOn(G, G.chaseLand);
+    G.chaseHops = false;
+  }
+
   B.chase = {
     spr: 'crouch', dur: [999, 999],
-    enter(G) { G.pounceT = U.rnd(1.2, 2.4); G.wandT = 0; G.catchPhase = null; G.playT = G.playT || 0; },
+    enter(G) { G.pounceT = U.rnd(1.2, 2.4); G.wandT = 0; G.catchPhase = null; G.playT = G.playT || 0; G.chaseHops = false; G.goalT = 0; },
+    exit(G) { finishWandHop(G); G.goY = null; },
     update(G, dt) {
       const w = D.Game.wand;
-      if (!w || !w.on) { G.behDone = true; return; }
+      // 正在跳（上高处 / 换地方 / 下来）：跳完再说
+      if (G.chaseHops) {
+        if (hop(G, dt)) {
+          G.hopping = false; G.chaseHops = false;
+          landOn(G, G.chaseLand);
+          if (!G.onPerch) G.y = G.gy;
+        }
+        return;
+      }
+      // 逗猫棒收起来了，或者被另一只猫吸引走了（追的永远是当前照顾的那只）：不追了
+      if (!w || !w.on || G !== D.Game.G) { G.behDone = true; return; }
       const c = cs(G);
 
       // 抓到之后：坐起来得意一会儿（「> <」脸），然后接着玩
@@ -429,6 +550,42 @@ window.DOLL = window.DOLL || {};
         G.winT -= dt;
         if (G.winT <= 0) { G.catchPhase = null; G.wandT = 0; }
         return;
+      }
+
+      // 逗猫棒指着的落脚点和猫现在待的地方不一样：停稳半秒就跟过去
+      const goal = wandSpot(G, w), here = curSpot(G);
+      const move = !sameSpot(goal, here);
+      G.goalT = move ? (G.goalT || 0) + dt : 0;
+      if (move && G.goalT > 0.5) {
+        let hops = null;
+        if (goal) {
+          const r = wandRoute(G, goal);
+          if (r && r.base) {
+            // 先跑到起跳点底下
+            G.goY = r.base.y;
+            const d = r.base.x - G.x;
+            if (!arrived(G, d, 1.5)) {
+              G.spr = 'stand'; G.walking = true; G.wiggle = false;
+              step(G, Math.sign(d) * Math.min(Math.abs(d), 62 * dt), 'run');
+              c.energy = U.clamp(c.energy - 1.5 * dt, 0, 100);
+              return;
+            }
+          }
+          hops = r && r.hops;
+        } else {
+          // 逗猫棒回到地上了：从现在这一层照着上来的路倒着跳下去
+          const path = AI.perchPath(G, here[0]) || [];
+          hops = path.slice(0, here[1]).reverse().map(p => ({ x: p.x, y: p.y }));
+          const first = path[0] || { x: G.x };
+          hops.push({ x: U.clamp(first.x + (here[0] === 'sill' ? -28 : 18), 16, G.L.W - 16),
+            y: AI.clampY(G.L, here[0] === 'sill' ? G.L.litter.y + 6 : G.L.floorY + 7) });
+        }
+        if (hops && hops.length) {
+          G.hops = hops; G.hopFrom = null; G.hopping = true;
+          G.chaseHops = true; G.chaseLand = goal;
+          G.onPerch = null; G.perchAt = null; G.goY = null; G.goalT = 0; G.wandT = 0; G.wiggle = false;
+          return;
+        }
       }
 
       const dx = w.x - G.x;
@@ -453,12 +610,17 @@ window.DOLL = window.DOLL || {};
       if (Math.abs(dx) > 4) G.facing = Math.sign(dx);
 
       G.wiggle = false;
+      // 在地上：逗猫棒落在地板那一片时，猫前后也跟着走到它那一排——
+      // 猫在砂盆 / 饭盆后面、逗猫棒在前面，就会绕到前面来
+      const onFloor = !G.onPerch;
+      if (onFloor) G.goY = w.y >= AI.floorMin(G.L) - 4 ? AI.clampY(G.L, w.y + 8) : null;
+      const deep = onFloor && G.goY != null && G.gy != null && Math.abs(G.goY - G.gy) > 3;
       if (high && Math.abs(dx) < 26) {
         G.spr = 'reach';
-      } else if (Math.abs(dx) > 18) {
+      } else if (onFloor && (Math.abs(dx) > 18 || deep)) {
         G.spr = 'stand';
         G.walking = true;
-        step(G, Math.sign(dx) * Math.min(Math.abs(dx) - 16, 62 * dt), 'run');
+        step(G, Math.abs(dx) > 18 ? Math.sign(dx) * Math.min(Math.abs(dx) - 16, 62 * dt) : 0, 'run');
       } else {
         // 盯住逗猫棒：压低身子扭屁股、甩尾巴，扑之前那一下停住不扭
         G.spr = 'crouch';
@@ -542,6 +704,7 @@ window.DOLL = window.DOLL || {};
       } else if (hop(G, dt)) {
         G.hopping = false;
         G.onPerch = G.perchGoal;
+        G.perchAt = null;
         G.perchGoal = null;
         G.facing = G.onPerch === 'sill' ? 1 : (U.chance(.5) ? 1 : -1);
         // 是冲着窗外的小鸟上来的：一落地就开始盯着鸟看
@@ -678,7 +841,10 @@ window.DOLL = window.DOLL || {};
     spr: 'stand', dur: [20, 20], walking: true,
     enter(G) {
       const path = AI.perchPath(G, G.onPerch) || [];
-      const down = path.slice(0, -1).reverse().map(p => ({ x: p.x, y: p.y }));
+      // 从现在站的那一层往下跳（平时在最顶上；追逗猫棒时可能停在半路）
+      const at = G.perchAt != null ? Math.min(G.perchAt, path.length - 1) : path.length - 1;
+      const down = path.slice(0, Math.max(0, at)).reverse().map(p => ({ x: p.x, y: p.y }));
+      G.perchAt = null;
       const last = path[0] || { x: G.x };
       down.push({ x: U.clamp(last.x + (G.onPerch === 'sill' ? -28 : 18), 16, G.L.W - 16),
         y: AI.clampY(G.L, G.onPerch === 'sill' ? G.L.litter.y + 6 : G.L.floorY + 7) });
@@ -1033,10 +1199,15 @@ window.DOLL = window.DOLL || {};
   };
 
   // 要在地上做的事（走路、吃饭、上厕所、追逗猫棒）：人在高处就先跳下来
-  const NEEDS_FLOOR = { refuel: 1, wander: 1, zoomies: 1, useLitter: 1, goEat: 1, chase: 1, play: 1, perch: 1, stretch: 1, pairGroom: 1, pairSleep: 1, wheel: 1, goDrink: 1 };
+  // （追逗猫棒不在这里面：在高处也能玩，逗猫棒落到地上时它自己会跳下来）
+  const NEEDS_FLOOR = { refuel: 1, wander: 1, zoomies: 1, useLitter: 1, goEat: 1, play: 1, perch: 1, stretch: 1, pairGroom: 1, pairSleep: 1, wheel: 1, goDrink: 1 };
 
   AI.start = function (G, name) {
-    if (G.onPerch && NEEDS_FLOOR[name]) { G.afterHop = name; name = 'hopDown'; }
+    // 追逗猫棒跳到一半被打断：先落到终点，下面才知道它现在在不在高处
+    if (G.chaseHops) finishWandHop(G);
+    // 停在半路的落脚点上（爬架下面两层、砂盆顶上）只是追逗猫棒时歇一下脚，不在那儿坐着 / 睡觉：别的事都先下地
+    const mid = G.onPerch && G.perchAt != null && G.perchAt < lastIdx(G, G.onPerch);
+    if (G.onPerch && name !== 'chase' && name !== 'hopDown' && (NEEDS_FLOOR[name] || mid)) { G.afterHop = name; name = 'hopDown'; }
     // 在碗边想趴下 / 睡觉：先走开，到了别处再趴
     if (LIE_DOWN[name] && !G.noDodge && !G.onPerch && !G.inWheel && G.L && G.L.bowl &&
         D.Game && D.Game.showScene && Math.abs(G.x - G.L.bowl.x) < BOWL_CLEAR) {

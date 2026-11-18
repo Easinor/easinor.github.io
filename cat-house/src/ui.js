@@ -138,8 +138,6 @@ window.DOLL = window.DOLL || {};
       if (p.classList.contains('show')) renderAccount();
     });
     el.appendChild(accBtn);
-    Acc.onMilestone = (h) => UI.banner(h + (h === 1 ? ' hour' : ' hours') + ' together',
-      'Luna and Nova feel closer to you');
     Acc.onLevelUp = (lv, title, newTitle) => UI.banner('Bond Lv.' + lv + ' · ' + title,
       lv >= 10 ? 'Max level — you, Luna and Nova are family' : 'New title! You, Luna and Nova grew a little closer');
     // 登录状态在后台变了（取回了服务器上的进度 / 令牌失效被登出）：按钮和面板跟着刷新
@@ -194,17 +192,13 @@ window.DOLL = window.DOLL || {};
       });
       return;
     }
-    const sec = u.seconds || 0, h = sec / 3600;
-    const next = Acc.MILESTONES.find(m => h < m);
+    const sec = u.seconds || 0;
     const b = Acc.bondInfo();
     p.innerHTML =
       '<h3>' + esc(u.id) + '</h3>' +
       '<div class="row"><b>Time together</b><span id="acc-time">' + Acc.fmt(sec) + '</span></div>' +
       '<div class="row"><b>Bond</b><span>Lv.' + b.lv + ' · ' + b.title + '</span></div>' +
       '<p class="hint">+1 every 5 seconds here, +5 for each action. A new title every level, up to Lv.10.</p>' +
-      '<div class="miles">' + Acc.MILESTONES.map(m =>
-        '<i class="' + (h >= m ? 'got' : '') + '">' + m + 'h</i>').join('') + '</div>' +
-      '<p class="hint">' + (next ? 'Next milestone: ' + next + 'h' : 'All milestones reached') + '</p>' +
       '<button class="chip" id="acc-out">Sign out</button>';
     p.querySelector('#acc-out').addEventListener('click', () => { Acc.signOut(); refreshAccBtn(); renderAccount(); });
   }
