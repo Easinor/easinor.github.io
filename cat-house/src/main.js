@@ -110,13 +110,32 @@ window.DOLL = window.DOLL || {};
 
   Game.resize = function () {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.max(320, window.innerWidth), h = Math.max(240, window.innerHeight);
+    const w = Math.max(320, window.innerWidth), H0 = Math.max(240, window.innerHeight);
     const mini = document.body.classList.contains('mini');
+    // 竖屏（手机竖着拿）：房间不跟着屏幕拉成细高的一条，而是保持横着的比例（4:3）摆在屏幕中间，
+    // 右上角那排按钮挪到房间正上方、底下的选项栏挪到房间正下方，三样东西上下排成一摞、整体居中
+    const portrait = !mini && H0 > w * 1.2;
+    document.body.classList.toggle('portrait', portrait);
+    let h = H0, top = 0;
+    if (portrait) {
+      const bar = document.getElementById('tools-top'), dock = document.getElementById('dock');
+      const barH = (bar && bar.offsetHeight) || 34, dockH = (dock && dock.offsetHeight) || 70;
+      h = Math.max(200, Math.min(Math.round(w * 0.75), H0 - barH - dockH - 34));
+      const barTop = Math.max(6, Math.round((H0 - (barH + 8 + h + 10 + dockH)) * 0.4));
+      top = barTop + barH + 8;
+      document.body.style.setProperty('--bar-top', barTop + 'px');
+      document.body.style.setProperty('--room-top', top + 'px');
+      document.body.style.setProperty('--room-bottom', (top + h) + 'px');
+    }
     const zoomMul = 0.78;   // 猫的大小固定用「小」，不再提供切换
     const base = mini
       ? Math.min(w / 110, h / 100)
       : Math.min(w / 215, h / 124);
-    const Z = U.clamp(Math.round(base * zoomMul), 2, 14);
+    // 放大倍数一般取整数。小屏幕上 2 倍放不下整间屋子、1 倍又太小：高分屏（手机都是）允许 1.5、2.5 这种半格的倍数，
+    // 乘上 dpr 还是整数，像素依然是硬边、不会糊
+    let Z = Math.round(base * zoomMul);
+    if (Z < 3 && dpr >= 2) Z = Math.round(base * zoomMul * 2) / 2;
+    Z = U.clamp(Z, dpr >= 2 ? 1.5 : 2, 14);
     G.Z = Z;
     const VW = Math.ceil(w / Z), VH = Math.ceil(h / Z);
 
@@ -124,6 +143,8 @@ window.DOLL = window.DOLL || {};
     canvas.height = Math.round(h * dpr);
     canvas.style.width = w + 'px';
     canvas.style.height = h + 'px';
+    canvas.style.top = top + 'px';
+    canvas.style.bottom = 'auto';
     ctx.imageSmoothingEnabled = false;
 
     const prevW = G.L ? G.L.W : 0;
@@ -196,6 +217,7 @@ window.DOLL = window.DOLL || {};
   canvas.addEventListener('pointerdown', (e) => {
     const p = pos(e);
     G.mouse = p; G.mouseIn = true;
+    G.touch = e.pointerType === 'touch';       // 手指按的：道具画得比手指高一点（不然正好被手指挡住），抬手就收起来
     UI.closePanels();
     Game.userActAt = performance.now();        // 你动手了：专注期间猫只在这之后的一小会儿里会出声回应
     try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* 有的环境抓不住指针，不影响 */ }
@@ -253,10 +275,15 @@ window.DOLL = window.DOLL || {};
   canvas.addEventListener('pointermove', (e) => {
     const p = pos(e);
     G.mouse = p; G.mouseIn = true;
+    G.touch = e.pointerType === 'touch';
     Act.onMove(G, p.x, p.y);
   });
-  canvas.addEventListener('pointerup', () => Act.onUp(G));
-  canvas.addEventListener('pointercancel', () => Act.onUp(G));
+  // 手指抬起来：屏幕上没有「鼠标停着的位置」了，手里的道具和悬停提示都收起来（逗猫棒除外：羽毛留在原地让猫接着扑）
+  const release = (e) => { Act.onUp(G); if (e.pointerType === 'touch') G.mouseIn = false; };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  // 长按不要弹出系统菜单（存图 / 复制那些）
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   document.addEventListener('mouseleave', () => { G.mouseIn = false; G.dragging = false; });
   document.addEventListener('mouseenter', () => { G.mouseIn = true; });
 

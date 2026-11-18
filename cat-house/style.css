@@ -31,6 +31,10 @@ html, body {
   image-rendering: crisp-edges;
 }
 body.tool-active #stage { cursor: none; }
+/* 触摸：在画面上拖动是在摸猫 / 梳毛 / 甩逗猫棒，不能被浏览器当成滚动、缩放页面；长按不选中、不弹菜单 */
+#stage { touch-action: none; }
+html, body { overscroll-behavior: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+button { touch-action: manipulation; }
 
 /* 像素风面板：硬边 + 两层描边，不用模糊 */
 .panel, .chip, .pick, #levelup {
@@ -290,3 +294,28 @@ body.mini .act { width: 38px; font-size: 0; gap: 0; padding: 3px 1px; }
 }
 body.mini #miniback { display: block; }
 #miniback:hover { opacity: 1; }
+
+/* ---------- 小屏幕 / 手机 ---------- */
+/* 右上角那排放不下就折行、亲密度条收窄 */
+#tools-top { flex-wrap: wrap; justify-content: flex-end; max-width: calc(100vw - 16px); }
+@media (max-width: 520px) {
+  #tools-top { right: 8px; top: 8px; gap: 5px; }
+  #bondbar { width: 150px; }
+  #pomo, #account { right: 8px; max-height: calc(100vh - 70px); overflow-y: auto; }
+  /* 选项栏：七块牌子要并排放进手机的宽度 */
+  #dock { gap: 3px; padding: 6px 6px 8px; }
+  .act { width: 44px; font-size: 9.5px; letter-spacing: 0; }
+}
+@media (max-width: 350px) {
+  .act { width: 39px; font-size: 9px; }
+}
+/* 手指点的设备：输入框字号小于 16px 时 iOS 会把整页放大，所以放到 16px */
+@media (pointer: coarse) {
+  #account input, .pm-row input { font-size: 16px; }
+  .pm-row input { width: 62px; }
+}
+/* 竖屏：按钮排 → 房间 → 选项栏，上下摞在一起（位置由 main.js 的 resize 算好写在 --bar-top / --room-top / --room-bottom 里） */
+body.portrait #tools-top { top: var(--bar-top, 8px); right: 8px; }
+body.portrait #dock { top: calc(var(--room-bottom, 60vh) + 10px); bottom: auto; }
+body.portrait #pomo, body.portrait #account { top: calc(var(--room-top, 50px) + 4px); max-height: calc(100vh - var(--room-top, 50px) - 14px); overflow-y: auto; }
+body.portrait #levelup { top: calc(var(--room-top, 50px) + 14px); }

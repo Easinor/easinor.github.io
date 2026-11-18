@@ -203,7 +203,8 @@ window.DOLL = window.DOLL || {};
   A.updateWand = function (G, dt) {
     const w = D.Game.wand;
     if (!w.on) return;
-    w.hx = G.mouse.x; w.hy = G.mouse.y;
+    // 手指按着的时候逗猫棒整根往上提：羽毛吊在指尖上方一点，不被手指挡住
+    w.hx = G.mouse.x; w.hy = G.mouse.y - (G.touch ? 32 : 0);
     const tx = w.hx, ty = w.hy + 20;
     w.vx += (tx - w.x) * 46 * dt;
     w.vy += (ty - w.y) * 46 * dt;
@@ -289,8 +290,9 @@ window.DOLL = window.DOLL || {};
 
   // ---------- 手里的道具（像素）----------
   A.drawCursor = function (ctx, G) {
-    if (!G.mouseIn) return;
-    const x = Math.round(G.mouse.x), y = Math.round(G.mouse.y);
+    if (!G.mouseIn && !(G.tool === 'wand' && G.touch && D.Game.wand.on)) return;
+    // 触摸屏上道具画在指尖上方一点（判定还是按指尖的位置）
+    const x = Math.round(G.mouse.x), y = Math.round(G.mouse.y) - (G.touch ? 9 : 0);
     const t = G.t;
 
     if (G.tool === 'wand') {

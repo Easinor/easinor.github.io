@@ -300,7 +300,12 @@ window.DOLL = window.DOLL || {};
     if (!accBtn) return;
     const u = D.Account.user();
     accBtn.textContent = u ? u.id + ' · ' + D.Account.fmt(u.seconds || 0) : 'Sign in';
-    bondEl.style.display = u ? '' : 'none';
+    const shown = u ? '' : 'none';
+    if (bondEl.style.display !== shown) {
+      bondEl.style.display = shown;
+      // 竖屏时这排按钮在房间正上方，高度变了（多了 / 少了亲密度条）房间要跟着重新摆
+      if (D.Game && D.Game.resize && document.body.classList.contains('portrait')) D.Game.resize();
+    }
     if (!u) return;
     const b = D.Account.bondInfo();
     document.getElementById('bb-lv').textContent = 'Lv.' + b.lv;
