@@ -1,0 +1,354 @@
+---
+title: "FlashbackANN: Nearest Neighbor Search That Travels Back in Time"
+short_title: "FlashbackANN"
+slug_id: flashback
+order: 4
+date: 2026-11-10
+venue: "Preprint"
+topics: ["Vector search", "Persistent data structures"]
+lead: "Which vectors were closest to this one, among everything that existed at some past moment? FlashbackANN answers that question for any point in a dataset's history, and builds its index in parallel, for histories of up to a billion vectors."
+summary: "Vector search over data as it existed at any past moment. Windowed batches make the index build parallel; one rule, freeze the graph after the insertions and before the deletions, makes them safe."
+excerpt: "An interactive explainer of FlashbackANN, a parallel index for time-travel approximate nearest neighbor search."
+authors: "Zijin Wan, Zheqi Shen, Yan Gu, Yihan Sun"
+accent: "#2a63d4"
+accent_dark: "#73abff"
+script: flashback.js
+---
+
+<style>
+  .blog-post[data-post="flashback"] #demo-beam canvas,
+  .blog-post[data-post="flashback"] #demo-filtered canvas { height: auto; aspect-ratio: 2 / 1; }
+  .blog-post[data-post="flashback"] #demo-build canvas { height: 310px; }
+  @media (max-width: 760px) {
+    .blog-post[data-post="flashback"] #demo-build canvas { height: 330px; }
+  }
+  @media (max-width: 520px) {
+    .blog-post[data-post="flashback"] #demo-beam canvas,
+    .blog-post[data-post="flashback"] #demo-filtered canvas { aspect-ratio: 5 / 6; }
+  }
+</style>
+
+<section id="hook" data-toc="The question">
+  <h2><span class="num">01</span>A question about the past</h2>
+  <p>An attack on a cloud service is discovered on Friday. The logs say it began on Tuesday at 3:14 am. The security team has a numeric fingerprint of how the attacker&rsquo;s session behaved, and wants the sessions that looked most like it. Not among all sessions ever recorded: among the sessions that were <strong>open at that moment</strong>. (The system maps that moment to a position in its update log; from here on, &ldquo;time&rdquo; means that position.)</p>
+  <p>This is a nearest neighbor search with a time machine attached. The same need shows up when auditing an AI system that answers from a changing document collection: to understand an old answer, you search the collection as it existed back then.</p>
+  <p>An ordinary vector index (the data structure built in advance so that searches are fast) knows one state of the data: now. This post explains <strong>FlashbackANN</strong>, our index for the question &ldquo;who were the nearest neighbors of \(q\) at a given past moment?&rdquo; Its main contribution is on the construction side: it is built in parallel batches, where the earlier index for this problem replays history one update at a time.</p>
+
+  <div class="stats" data-reveal>
+    <div class="stat"><span class="stat-num">11.5 s</span><span class="stat-label">to index 10<sup>6</sup> vectors of the BIGANN benchmark on 112 cores (224 hyperthreads); the earlier, sequential index takes 5,749 s</span></div>
+    <div class="stat"><span class="stat-num">41&ndash;620&times;</span><span class="stat-label">faster construction on 112 cores than the earlier, sequential index (1.4&ndash;17&times; on a single thread), over all datasets, life ranges and storage layouts we tested</span></div>
+    <div class="stat"><span class="stat-num">3.2&ndash;3.5 h</span><span class="stat-label">to index a history of 10<sup>9</sup> vectors on the same machine (BIGANN and DEEP)</span></div>
+    <div class="stat"><span class="stat-num">0.25&ndash;0.50&times;</span><span class="stat-label">the memory of the earlier index at 10<sup>6</sup> vectors, with a new way to store the graph&rsquo;s history</span></div>
+  </div>
+
+  <div class="callout"><span class="callout-label">The whole idea in three sentences</span><p>A point that is missing from an index cannot be searched for. A point that is there but should not be can be filtered out. So process updates in batches, and freeze the index after each batch&rsquo;s insertions and before that batch&rsquo;s deletions.</p></div>
+  <p>The rest of the post unpacks those three sentences. All numbers come from the current draft of our paper.</p>
+</section>
+
+<section id="background" data-toc="Vector search">
+  <h2><span class="num">02</span>Vector search in three minutes</h2>
+  <p>Modern systems turn documents, images or user sessions into <strong>vectors</strong> (also called embeddings): lists of a few hundred numbers, arranged so that similar items land close to each other. &ldquo;Find similar items&rdquo; then becomes <strong>nearest neighbor search</strong>: given a query vector \(q\), find the \(k\) stored vectors closest to it.</p>
+  <p>Comparing \(q\) with every stored vector is exact but too slow for large collections. Real systems use <strong>approximate nearest neighbor search (ANNS)</strong>: they accept missing a few of the true neighbors in exchange for a large speedup. Two numbers describe how well that goes:</p>
+  <ul>
+    <li><strong>Recall</strong> is the fraction of the true \(k\) nearest neighbors that the index returned. Recall 0.99 with \(k = 10\) means that, on average, 9.9 of the 10 returned points are correct.</li>
+    <li><strong>Throughput</strong> is the number of queries answered per second (QPS).</li>
+  </ul>
+  <p>The most popular kind of ANNS index is a <strong>proximity graph</strong>. Every vector is a vertex. When a vector is inserted, it is linked to a few vectors near it (at most 32 in our experiments). A query walks this graph with a <strong>beam search</strong>:</p>
+  <ol>
+    <li>Start at a fixed <strong>entry point</strong> and keep a list of the best candidates found so far. The list has room for \(L\) candidates; \(L\) is called the <strong>beam width</strong>.</li>
+    <li>Take the closest candidate that has not been <em>expanded</em> yet, look at its neighbors, and add them to the list.</li>
+    <li>Keep only the \(L\) closest. Stop when everything on the list has been expanded, and return the \(k\) closest.</li>
+  </ol>
+  <p>A larger \(L\) explores more of the graph, which is slower and more accurate. That is the knob behind every recall-versus-throughput curve.</p>
+
+  <figure class="demo" id="demo-beam">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Beam search on a toy proximity graph</h3>
+      <p class="demo-hint">Click or tap anywhere to move the query <b>q</b>. Change the beam width and replay the search step by step. Keyboard: arrow keys choose a vertex, Enter moves <b>q</b> next to it.</p>
+    </div>
+    <div class="demo-stage"><canvas class="clickable"></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--b-accent); border: 1.5px solid var(--b-ink)"></span>expanded</span>
+      <span><span class="sw" style="background: var(--v-gray); border: 1.5px solid var(--b-ink)"></span>discovered</span>
+      <span><span class="sw" style="background: var(--v-gray); opacity: 0.5"></span>not visited</span>
+      <span><span class="sw" style="background: var(--v-green)"></span>returned (k = 3)</span>
+      <span><span class="sw" style="border: 2px dashed var(--v-green); background: none"></span>true nearest neighbors</span>
+      <span><span class="sw line" style="background: var(--b-accent)"></span>the walk (thick: between expanded vertices)</span>
+    </div>
+    <figcaption>The strip at the bottom is the candidate list with its \(L\) slots. The search expands a small part of the graph. With \(L = 1\) the list holds a single candidate, so the search is a greedy walk that returns one point; real systems use \(L \ge k\). Navigation is easier in two dimensions than in hundreds, so this toy shows the mechanism, not the performance.</figcaption>
+  </figure>
+
+  <p>One observation from this picture matters for everything that follows. <strong>The graph is not the data. It is a navigation aid.</strong> Many different graphs over the same points are valid indexes. Some navigate better than others, but none of them is <em>the</em> correct one, so an index is free to build whichever is convenient.</p>
+</section>
+
+<section id="problem" data-toc="Adding time">
+  <h2><span class="num">03</span>Now add time</h2>
+  <p>In the time-travel version of the problem, the data is a stream of updates: vectors are inserted, and later they expire. A <strong>timestamp</strong> \(ts\) is the position of an update in that stream (operation 0, operation 1, &hellip;).</p>
+  <p>Each vector has a <strong>lifespan</strong> \([s, e)\): it is inserted by operation \(s\) and removed by operation \(e\). It is <strong>alive</strong> at \(ts\) when \(s \le ts &lt; e\). A <strong>time-travel query</strong> is a pair \((q, ts)\) and asks for the approximate \(k\) nearest neighbors of \(q\) among the points alive at \(ts\). Recall is measured against the true nearest neighbors <em>among those alive points</em>.</p>
+  <p>One detail shapes the whole problem: when a vector is inserted, nobody knows when it will expire. Its lifespan is complete only after the fact.</p>
+
+  <h3>Four existing approaches</h3>
+  <ul>
+    <li><strong>Post-filter.</strong> Build one graph over every point ever inserted, search it without regard to time, then keep the results that were alive. This works well when most points are alive. When 1 point in 100 is alive, about 99 of every 100 candidates it fetches are discarded.</li>
+    <li><strong>Pre-filter.</strong> First collect the points alive at \(ts\), then compare \(q\) with each of them. This is exact, and it is the right choice when few points are alive; its cost grows linearly with the number of alive points.</li>
+    <li><strong>Range-filter indexes.</strong> These answer queries like &ldquo;nearest neighbors whose price is between 10 and 20&rdquo;. They are designed for one number per point, known when the point is indexed; a lifespan is two numbers, one of them unknown at insertion.</li>
+    <li><strong>Timestamp Graph (TG)</strong> (Wang et al., ICDE 2025) is, to our knowledge, the one earlier index designed for this problem. TG maintains a single graph, applies the stream one operation at a time, and records for every edge the period during which it existed. A query at \(ts\) reconstructs each visited vertex&rsquo;s neighbor list as of \(ts\).</li>
+  </ul>
+  <p>TG&rsquo;s goal is a strong one: the graph it reconstructs for a timestamp is the graph the stream had produced at exactly that operation. That exactness is also what fixes its construction order: operation 1,000,001 can only be applied once operation 1,000,000 is in place, so the build is sequential by design. In our runs of TG&rsquo;s released code, indexing a million vectors takes between about half an hour and several hours, depending on the dataset and on how long points live (5,749 s for BIGANN at life range 10<sup>5</sup>, the setting of our summary table).</p>
+</section>
+
+<section id="trap" data-toc="Snapshots">
+  <h2><span class="num">04</span>The tempting fix, and its trap</h2>
+  <p>Parallel ANNS libraries already know how to apply many updates at once, as a <em>batch</em>. So the natural plan is: cut the stream into <strong>windows</strong> of \(W\) operations, apply each window as one parallel batch, and save an exact <strong>snapshot</strong> of the graph after each window. A query at \(ts\) uses the most recent snapshot.</p>
+  <p>Now take a query that lands <em>between</em> two snapshots. Relative to the true state at \(ts\), the snapshot differs in two ways:</p>
+  <ul>
+    <li>It may contain points that are not alive at \(ts\). Call these <span class="k k-orange">extras</span>.</li>
+    <li>It does not contain points inserted between the snapshot and \(ts\). Call these <span class="k k-red">missing</span>.</li>
+  </ul>
+  <p>The two look symmetric. They are not. Try it on a small example: ten points A to J, twenty operations, windows of five.</p>
+
+  <figure class="demo" id="demo-snapshot">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Exact snapshots leave a blind spot</h3>
+      <p class="demo-hint">Drag the vertical line sideways (or use the slider) to move the query time. Each bar is one point&rsquo;s lifespan: filled dot = inserted, hollow dot = expired. Shaded bands are windows.</p>
+    </div>
+    <div class="demo-stage"><canvas></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw line" style="background: var(--v-teal)"></span>alive, and in the graph searched</span>
+      <span><span class="sw line" style="background: var(--v-orange)"></span>in the graph, not alive at ts (filtered)</span>
+      <span><span class="sw line" style="background: var(--v-red)"></span>alive, but missing from the graph</span>
+      <span><span class="sw line" style="background: var(--v-gray)"></span>not in the graph searched</span>
+      <span><span class="sw sq" style="background: var(--v-teal); transform: rotate(45deg) scale(0.8)"></span>alive at the query time</span>
+    </div>
+    <figcaption>S<sub>0</sub>, S<sub>1</sub>, S<sub>2</sub> are exact snapshots taken at the end of each window. The tinted area is everything that happened after the snapshot in use. At \(ts = 7\), two of the four alive points (E and F) are not in the graph.</figcaption>
+  </figure>
+
+  <p>An <span class="k k-orange">extra</span> is cheap. The search runs into the point, compares two numbers (is \(s \le ts &lt; e\)?), and discards it.</p>
+  <p>A <span class="k k-red">missing</span> point is invisible. It is not a vertex of the graph being searched, so no beam width will ever reach it. The only remedy is to scan the recent operations separately on every query. A graph search expands a few hundred points, while \(W\) needs to be around 10,000 for batching to pay off, so the scan costs more than the search.</p>
+  <p>We measured this design as a control. With \(W\) = 10<sup>4</sup> and about 5,000 points alive, a query lands on average 5,000 operations after its snapshot, half of them insertions: roughly 2,500 of the 5,000 alive points are missing. The measured recall plateaus at 0.57&ndash;0.59 for every beam width. With ten times more points alive, the plateau is 0.97&ndash;0.98. A variant that uses the nearer of the two surrounding snapshots and scans the operations in between restores recall, and is 1.7&ndash;3.2&times; slower than FlashbackANN at recall 0.95 (1.3&ndash;2.2&times; at recall 0.99).</p>
+</section>
+
+<section id="cover" data-toc="Cover-and-filter">
+  <h2><span class="num">05</span>Cover-and-filter</h2>
+  <p>FlashbackANN keeps the windows and the batches, and changes one thing: <strong>when</strong> the graph is frozen. For window number \(c\) it does three things, in this order:</p>
+  <ol>
+    <li><span class="k k-teal">Insert</span> all the points that arrive in window \(c\).</li>
+    <li><strong>Freeze</strong> the graph. This frozen graph is <strong>checkpoint</strong> \(G_c\).</li>
+    <li><span class="k k-orange">Delete</span> all the points that expire in window \(c\).</li>
+  </ol>
+  <p>So \(G_c\) contains every insertion up to the end of window \(c\), and the deletions only up to the end of window \(c - 1\). It is deliberately a little too big. Nothing alive during the window can be missing, and whatever is extra gets filtered. Extras now come in two kinds: points that expired earlier in the window, and points that will only be inserted later in it.</p>
+
+  <div class="callout"><span class="callout-label">Why nothing is ever missing</span><p>Take a query at \(ts\) inside window \(c\), and a point alive at \(ts\). Its insertion happened at or before \(ts\), so in window \(c\) or earlier: it was applied before \(G_c\) was frozen. Its expiration happens after \(ts\), so in window \(c\) or later: it was <em>not</em> applied before \(G_c\) was frozen. Therefore the point is in \(G_c\). The query uses checkpoint \(c = \lfloor ts / W \rfloor\) and nothing else.</p></div>
+
+  <figure class="demo" id="demo-cover">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Every query time is covered by one checkpoint</h3>
+      <p class="demo-hint">Move the query time. Then switch the design back to exact snapshots, or change the window size, and watch what the query can see.</p>
+    </div>
+    <div class="demo-stage"><canvas></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw line" style="background: var(--v-teal)"></span>alive, and in the graph searched</span>
+      <span><span class="sw line" style="background: var(--v-orange)"></span>in the graph, not alive at ts (filtered)</span>
+      <span><span class="sw line" style="background: var(--v-red)"></span>alive, but missing from the graph</span>
+      <span><span class="sw line" style="background: var(--v-gray)"></span>not in the graph searched</span>
+      <span><span class="sw sq" style="background: var(--v-teal); transform: rotate(45deg) scale(0.8)"></span>alive at the query time</span>
+    </div>
+    <figcaption>With cover-and-filter, &ldquo;alive but missing&rdquo; is zero for every query time and every \(W\). The highlighted band is the window whose checkpoint answers the query. A checkpoint belongs to a window, yet answers still change from one operation to the next: with \(W = 5\), \(ts = 6\) and \(ts = 7\) share \(G_1\) and return different sets.</figcaption>
+  </figure>
+
+  <p>A few things worth trying in the figure:</p>
+  <ul>
+    <li><strong>Short lives are kept.</strong> B, F, H and J all live for less than one window. Each is in a checkpoint and is found by queries during its life.</li>
+    <li><strong>A checkpoint is a superset.</strong> A expires at operation 5, the first operation of window 1. Since \(G_1\) is frozen before window 1&rsquo;s deletions, A is in \(G_1\), and the filter removes it every time.</li>
+    <li><strong>Long lives repeat.</strong> D is in \(G_0\), \(G_1\) and \(G_2\). Storing that repetition compactly is the subject of <a href="#storage">section 8</a>.</li>
+    <li><strong>\(W\) is a dial.</strong> A larger \(W\) means bigger batches and fewer checkpoints, and more orange bars to filter per query.</li>
+  </ul>
+  <p>What this guarantees, precisely:</p>
+  <ul>
+    <li><strong>Coverage:</strong> the checkpoint that is searched contains every point alive at \(ts\).</li>
+    <li><strong>Soundness:</strong> every point returned is alive at \(ts\).</li>
+  </ul>
+  <p>So the set of eligible points is exact, at the resolution of single operations. The ranking comes from a graph search and is approximate, as in any ANNS index; its quality is what the recall numbers in <a href="#results">section 9</a> measure. And \(G_c\) need not be the graph a one-at-a-time build would have had at any moment: as section 2 ended, any good graph over the right points will do.</p>
+</section>
+
+<section id="build" data-toc="Parallel build">
+  <h2><span class="num">06</span>Building it in parallel</h2>
+  <p>Because nothing has to be exact in the middle of a window, each window becomes two big batches with a freeze in between. Inside a batch, the cores of the machine work at the same time. The windows themselves are processed in order, one after another, which is why the window size matters so much.</p>
+
+  <figure class="demo" id="demo-build">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Insert, freeze, delete</h3>
+      <p class="demo-hint">Press Play, or step with the arrows. Change the window size to see fewer, larger batches.</p>
+    </div>
+    <div class="demo-stage"><canvas></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--v-teal)"></span>live vertex / insertion</span>
+      <span><span class="sw" style="border: 2px dashed var(--v-orange); background: none"></span>marked dead / expiration</span>
+      <span><span class="sw sq" style="background: var(--b-accent)"></span>frozen checkpoint</span>
+    </div>
+    <figcaption>The order of the three steps is the entire trick. Freezing is drawn as a copy, but nothing is copied: checkpoints share storage (<a href="#storage">section 8</a>). In this ten-point example every delete step crosses the 10% threshold described below, so dead vertices are cleaned up right away.</figcaption>
+  </figure>
+
+  <p>What happens inside each step:</p>
+  <ul>
+    <li><strong>Insert batch.</strong> We use the parallel batch insertion of <a href="https://github.com/cmuparlay/ParlayANN">ParlayANN</a>, a library of parallel graph-index algorithms, for the Vamana graph (the proximity graph behind <a href="https://github.com/microsoft/DiskANN">DiskANN</a>). Each new point runs its own beam search over the current graph to find its neighbors, and many points do this at once. Points inserted together do not see each other while searching, so the batch is fed in pieces of doubling size (1, 2, 4, 8, &hellip;), which keeps every piece from being much larger than the graph it joins. Edits to the same neighbor list are grouped so that one thread applies them, without locks.</li>
+    <li><strong>Freeze.</strong> The current graph is declared checkpoint \(G_c\). From now on it can be read but never changed. Only the newest graph is ever modified; a structure that keeps old versions readable like this is called <strong>partially persistent</strong>.</li>
+    <li><strong>Delete batch.</strong> Expired points are marked dead. From that moment they are logically gone: no later query returns them. Physically they stay in the current graph as stepping stones until enough has accumulated. Once per window the index checks the dead fraction: past 10% it rewires the live vertices around their dead neighbors, and past 50% it rebuilds the current graph from its live points.</li>
+  </ul>
+  <p>The window size \(W\) is the parallelism dial. Larger windows give bigger batches, at the price of more filtering during queries. Our default is \(W\) = 10<sup>4</sup>.</p>
+  <p>Batching helps even without parallelism, because a whole window is applied at once and recorded as one checkpoint. In our thread-scaling experiment (life range 10<sup>4</sup>), FlashbackANN builds 1.4&ndash;17&times; faster than TG on a single thread and 58&ndash;477&times; faster on all threads.</p>
+</section>
+
+<section id="query" data-toc="Queries">
+  <h2><span class="num">07</span>Answering a query</h2>
+  <p>A query \((q, ts)\) picks its checkpoint by a division, \(c = \lfloor ts / W \rfloor\), and runs a beam search on \(G_c\). It is the same best-first walk as in section 2. What changes is how \(L\) is counted: there, \(L\) was the size of the candidate list; here it is the number of <em>alive</em> vertices the walk must expand before it stops.</p>
+  <ul>
+    <li>If the expanded vertex is <span class="k k-teal">alive</span> at \(ts\), it goes into the result pool and counts toward \(L\).</li>
+    <li>If it is <span class="k k-orange">not alive</span>, it is not a result and does not count. Its edges are still followed: it acts as a stepping stone.</li>
+    <li>The search stops once it has expanded \(L\) alive vertices, or has nothing left to expand.</li>
+  </ul>
+  <p>The filter runs <em>inside</em> the search. A vertex can be &ldquo;not alive at \(ts\)&rdquo; for two reasons, and one comparison handles both: it is one of this window&rsquo;s extras, or it expired in an earlier window and has not been cleaned out of the graph yet. The figure below runs this query next to two other strategies on the same points.</p>
+
+  <figure class="demo" id="demo-filtered">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>A time-travel query, three ways</h3>
+      <p class="demo-hint">Click or tap to move <b>q</b>, slide the query time, and switch the strategy. Step through to see where each search spends its effort.</p>
+    </div>
+    <div class="demo-stage"><canvas class="clickable"></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--v-teal)"></span>alive at ts</span>
+      <span><span class="sw" style="border: 2px solid var(--v-orange); background: none"></span>in the graph, not alive at ts</span>
+      <span><span class="sw" style="background: var(--v-teal); border: 1.5px solid var(--b-ink)"></span>expanded (dark or thick outline)</span>
+      <span><span class="sw" style="background: var(--v-green)"></span>returned (k = 3)</span>
+      <span><span class="sw" style="border: 2px dashed var(--v-green); background: none"></span>true nearest alive neighbors</span>
+      <span><span class="sw line" style="background: var(--b-accent)"></span>the walk</span>
+      <span><span class="sw" style="background: var(--v-gray); width: 0.35em; height: 0.35em"></span>not in this graph</span>
+    </div>
+    <figcaption>90 points whose lifespans follow our synthetic workload, in windows of 30 operations, on a toy graph with 4 edges per vertex. <b>Cover-and-filter</b> runs the loop above on the covering checkpoint. <b>Post-filter</b> runs the section-2 search on a graph of every point ever inserted and then keeps the alive results. <b>Remove non-alive</b> deletes the non-alive vertices from the checkpoint before searching, which also removes the stepping stones; this third mode is an illustration we added, not an experiment from the paper. The strategies spend \(L\) differently, so compare their expansions.</figcaption>
+  </figure>
+
+  <p>The extra work in a FlashbackANN query is the time spent on hollow vertices, and it stays small while the alive points outnumber the extras. When very few points are alive, the query takes a shortcut. Two sorted arrays (insertion times and expiration times) give the number of alive points at any \(ts\) with two binary searches. If it is below a threshold (\(W / 10\) by default), the query compares \(q\) with the alive points directly, which is exact and, for so few points, fast. Slide the query time to either end of the figure to see it.</p>
+</section>
+
+<section id="storage" data-toc="Storage">
+  <h2><span class="num">08</span>Storing thousands of graphs</h2>
+  <p>A stream over a million points has two million operations, which at \(W\) = 10<sup>4</sup> means 200 checkpoints. A billion points means 200,000. We estimate that storing every checkpoint separately would take about 7 TB at that scale, so cover-and-filter needs checkpoints that are nearly free.</p>
+  <p>They can be, because consecutive checkpoints are almost identical: a vertex&rsquo;s neighbor list changes only when a nearby point is inserted or the graph is rewired around a deletion. The question is what unit to share. Here is one vertex whose neighbor list changes twice over five checkpoints:</p>
+
+  <div class="table-scroll nowrap" data-reveal>
+    <table>
+      <thead><tr><th>Checkpoint</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th class="num">Stored</th></tr></thead>
+      <tbody>
+        <tr><td>Neighbor list</td><td>A D G</td><td>A D G</td><td>D G B</td><td>D G B</td><td>G B E</td><td class="num"></td></tr>
+        <tr><td>Copy every time</td><td>A D G</td><td>A D G</td><td>D G B</td><td>D G B</td><td>G B E</td><td class="num">15 entries</td></tr>
+        <tr><td>Copy when changed</td><td>A D G</td><td>&mdash;</td><td>D G B</td><td>&mdash;</td><td>G B E</td><td class="num">9 entries</td></tr>
+        <tr class="ours"><td>One record per edge</td><td colspan="5">A[0,2) &nbsp; D[0,4) &nbsp; G[0,&infin;) &nbsp; B[2,&infin;) &nbsp; E[4,&infin;)</td><td class="num">5 records</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>&ldquo;Copy every time&rdquo; and &ldquo;copy when changed&rdquo; are <strong>per-vertex versioning</strong>: the unit is a whole neighbor list. The general-purpose persistent layouts in the library we build on work this way. Replacing a single neighbor stores a new version of the list, and every read first locates the right version.</p>
+  <p>Our layout is <strong>per-edge</strong>. Each edge is written down once, with the range of checkpoints [born, died) during which it existed. Space grows with the number of edge <em>changes</em>, not with the number of checkpoints. Each vertex has two parts:</p>
+  <ul>
+    <li>a <strong>live buffer</strong> with the edges that currently exist, in order of birth, and</li>
+    <li>an append-only <strong>history</strong>: whenever an edge is removed, it is appended with its lifetime, and never touched again.</li>
+  </ul>
+  <p>Appending edges when they die has a useful side effect: <strong>the history is sorted by time of death</strong>. The history is cut into blocks (32 edges each in the real system, 3 in the figure). A full block is <em>sealed</em>: stored compressed, with a summary of the earliest birth and latest death among its edges, so reading it means decoding it. The newest, not yet full block is the <em>open tail</em>. To read the neighbor list at checkpoint \(c\), a binary search skips every sealed block whose edges had all died by \(c\), and blocks whose edges were all born after \(c\) are skipped by a look at their summary.</p>
+
+  <figure class="demo" id="demo-history">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Reading one vertex&rsquo;s neighbor list at checkpoint c</h3>
+      <p class="demo-hint">Slide the checkpoint. Each record is an edge with its lifetime [born, died), measured in checkpoint numbers.</p>
+    </div>
+    <div class="demo-stage"><canvas class="tall"></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw sq" style="background: var(--v-green)"></span>edge exists at c (returned)</span>
+      <span><span class="sw sq" style="border: 2px solid var(--v-orange); background: none"></span>decoded, but not alive at c</span>
+      <span><span class="sw sq" style="border: 1px solid var(--v-gray); background: none"></span>never looked at</span>
+    </div>
+    <figcaption>The numbers under each block name are its summary: [earliest birth, latest death]. Because deaths only increase down the list, one binary search discards every block that had died by \(c\); of the blocks that remain, those born entirely later are skipped by their summary. With three edges per block the saving looks modest; the real system uses 32. Here \(c\) is a checkpoint number, \(\lfloor ts / W \rfloor\), and the history count excludes the live buffer.</figcaption>
+  </figure>
+
+  <p>TG also records a lifetime for each edge. What is new here is the layout (contiguous, in order of removal, summarized per block, compressed) and that history is recorded once per window. At a billion points it fits in 611 GB (BIGANN) and 853 GB (DEEP) on a machine with 1.5 TB. At 100 million points the most compact of the library&rsquo;s general-purpose layouts needs 3.0&ndash;3.7&times; the memory of ours, which extrapolates to over 2 TB at a billion.</p>
+</section>
+
+<section id="results" data-toc="Results">
+  <h2><span class="num">09</span>Results</h2>
+  <p>All experiments run on one machine with 112 cores (224 hyperthreads, two hardware threads per core) and 1.5 TB of memory, with \(W\) = 10<sup>4</sup>, \(k = 10\) and at most 32 edges per vertex. We use four standard benchmarks of a million vectors each: <a href="http://corpus-texmex.irisa.fr/">BIGANN</a> (128-dimensional image descriptors), DEEP (96-dimensional image embeddings), OpenAI (1,536-dimensional text embeddings) and Cohere (768-dimensional text embeddings). Lifespans are synthetic: each point lives for a random number of insertions up to a <strong>life range</strong> \(R\), so about \(R / 2\) points are alive at once, from about 500 (\(R\) = 10<sup>3</sup>) to about 500,000 (\(R\) = 10<sup>6</sup>). The baselines are TG (run from its authors&rsquo; released code, with the same degree limit and construction beam width as ours), pre-filter, post-filter, and a range-filter index adapted to lifespans.</p>
+
+  <h3>Building the index</h3>
+  <figure class="demo" id="demo-buildtime">
+    <div class="demo-head">
+      <span class="demo-tag">Measured</span>
+      <h3>Index construction time</h3>
+      <p class="demo-hint">Switch between a linear and a logarithmic axis, and between the two datasets that we scaled to a billion points.</p>
+    </div>
+    <div class="demo-stage"><canvas class="short"></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <figcaption>Build times from our summary table, at life range \(R\) = 10<sup>5</sup> with the default storage layout. FlashbackANN runs on all 112 cores with hyperthreads; Timestamp Graph is a sequential program. Timestamp Graph has no bar at a billion points because we did not run it at that scale.</figcaption>
+  </figure>
+  <p>Across all four datasets, all life ranges and all six storage layouts we tested (copy every time, three copy-when-changed variants, and two per-edge variants), FlashbackANN on 112 cores builds <strong>41&ndash;620&times; faster</strong> than TG. With the same life range on both sides (10<sup>4</sup>), the gap is 1.4&ndash;17&times; on one thread and 58&ndash;477&times; on all threads: the first number is the algorithmic part, and parallelism supplies the rest. At a billion points the build takes 3.2 h (BIGANN) and 3.5 h (DEEP).</p>
+
+  <h3>Answering queries</h3>
+  <p>The table compares TG and FlashbackANN (&ldquo;Ours&rdquo;) at 10<sup>6</sup> and 10<sup>9</sup> points and life range \(R\) = 10<sup>5</sup>. kQPS is thousands of queries per second for the whole machine, one thread per query, at the stated recall.</p>
+  <div class="table-scroll nowrap" data-reveal>
+    <table>
+      <thead>
+        <tr><th></th><th colspan="3" style="text-align:center">BIGANN</th><th colspan="3" style="text-align:center">DEEP</th></tr>
+        <tr><th></th><th class="num">TG, 10<sup>6</sup></th><th class="num">Ours, 10<sup>6</sup></th><th class="num">Ours, 10<sup>9</sup></th><th class="num">TG, 10<sup>6</sup></th><th class="num">Ours, 10<sup>6</sup></th><th class="num">Ours, 10<sup>9</sup></th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Build time (s)</td><td class="num">5,749</td><td class="num">11.5</td><td class="num">11,548</td><td class="num">4,372</td><td class="num">12.4</td><td class="num">12,557</td></tr>
+        <tr><td>Memory (GB)</td><td class="num">7.2</td><td class="num">2.2</td><td class="num">611</td><td class="num">6.9</td><td class="num">2.5</td><td class="num">853</td></tr>
+        <tr><td>kQPS at recall 0.90</td><td class="num">183</td><td class="num">612</td><td class="num">575</td><td class="num">170</td><td class="num">717</td><td class="num">450</td></tr>
+        <tr><td>kQPS at recall 0.99</td><td class="num">38.5</td><td class="num">227</td><td class="num">150</td><td class="num">5.0</td><td class="num">171</td><td class="num">119</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>At a million points FlashbackANN has 3.3&ndash;4.2&times; the throughput of TG at recall 0.90 and 5.9&ndash;34&times; at recall 0.99 (the largest ratio is on DEEP, where 0.99 is close to the highest recall TG reaches). Across the baselines, FlashbackANN has the highest throughput at nearly every recall level, most clearly at high recall.</p>
+  <ul>
+    <li><strong>Recall.</strong> Every FlashbackANN layout reaches recall above 0.97 in every setting. TG&rsquo;s attainable recall decreases as points live longer, down to 0.61 on Cohere at \(R\) = 10<sup>6</sup>.</li>
+    <li><strong>Few alive points.</strong> At \(R\) = 10<sup>3</sup> (about 500 alive), every FlashbackANN query takes the direct comparison from <a href="#query">section 7</a> and returns exact answers 1.2&ndash;13.6&times; faster than TG&rsquo;s fastest setting.</li>
+    <li><strong>Memory.</strong> With the per-edge layout, 0.25&ndash;0.50&times; that of TG at a million points, across all datasets and life ranges.</li>
+    <li><strong>Window size.</strong> At \(R\) = 10<sup>4</sup>, growing \(W\) from 10<sup>3</sup> to 10<sup>5</sup> speeds up the build 6.6&ndash;9.1&times;. At recall 0.99, \(W\) = 10<sup>3</sup> answers 1.0&ndash;2.7&times; faster than 10<sup>4</sup>, and 10<sup>4</sup> answers 3.4&ndash;6.2&times; faster than 10<sup>5</sup>; the per-edge layout&rsquo;s memory is nearly unchanged. Hence the default of 10<sup>4</sup>.</li>
+    <li><strong>A real update trace.</strong> On the creation and deletion times of 10.3 million English Wikipedia pages (13.8 million operations, with BIGANN and DEEP vectors assigned to the pages), FlashbackANN builds in about three minutes against 4.3&ndash;5.4 hours for TG (82&ndash;120&times;), and has 8.9&ndash;9.8&times; the throughput at recall 0.95.</li>
+  </ul>
+  <p><strong>Scope.</strong> &ldquo;A billion&rdquo; is the number of points in the indexed history; at \(R\) = 10<sup>5</sup>, tens of thousands of them are alive at any one moment, at every scale. That is why throughput at a fixed beam width drops by only 1.2&ndash;1.6&times; from 10<sup>6</sup> to 10<sup>9</sup> points. Construction is the parallel part; each query runs on one thread, and many queries run side by side.</p>
+</section>
+
+<section id="recap" data-toc="Recap">
+  <h2><span class="num">10</span>Recap</h2>
+  <p>A proximity graph is a navigation aid, so a time-travel index does not have to preserve the exact graph of every past moment. It is enough to have, for every past moment, <em>some</em> graph that contains all the points alive then.</p>
+  <ul>
+    <li><strong>Cover.</strong> Freezing the graph once per window, after the insertions and before the deletions, gives every query time a checkpoint that contains everything alive.</li>
+    <li><strong>Filter.</strong> A two-number lifespan check inside the search removes whatever is extra.</li>
+    <li><strong>Parallel batches.</strong> Since nothing has to be exact inside a window, each window is applied as parallel batches: 11.5 s for a million points on 112 cores, and a few hours for a billion.</li>
+    <li><strong>One record per edge.</strong> Consecutive checkpoints barely differ, so writing each edge once with its lifetime lets a billion-point history fit in the memory of a single machine.</li>
+  </ul>
+  <div class="callout"><span class="callout-label">If you remember one thing</span><p>Design the index so that its only errors are the kind a search can filter out. Then build it in batches.</p></div>
+</section>

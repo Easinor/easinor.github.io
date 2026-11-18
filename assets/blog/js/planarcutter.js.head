@@ -1,0 +1,790 @@
+/* PlanarCutter post: interactive demos.
+   Depends on common.js (global Blog).
+
+   Everything on the page is computed live from a small plane-graph toolkit:
+   faces from the rotation system, the radial (vertex-face) graph, the wall BFS,
+   a max-flow min vertex cut used as an independent check, nested dissection,
+   and the CCH contraction that turns an order into an index. */
+(function () {
+  'use strict';
+
+  var D = Blog.draw;
+  var FREE = 0, SRC = 1, SNK = 2;
+
+  /* ======================================================================
+     Small helpers
+     ====================================================================== */
+
+  function filled(n, value) {
+    var out = [], i;
+    for (i = 0; i < n; i++) out.push(value);
+    return out;
+  }
+
+  function numeric(a, b) { return a - b; }
+
+  function uniq(list) {
+    var seen = {}, out = [];
+    list.forEach(function (v) { if (!seen[v]) { seen[v] = true; out.push(v); } });
+    return out;
+  }
+
+  function crossProd(ax, ay, bx, by) { return ax * by - ay * bx; }
+
+  /* proper intersection of segments ab and cd; touching at endpoints does not count */
+  function segHit(a, b, c, d) {
+    var rx = b.x - a.x, ry = b.y - a.y, sx = d.x - c.x, sy = d.y - c.y;
+    var den = crossProd(rx, ry, sx, sy);
+    if (Math.abs(den) < 1e-12) return null;
+    var t = crossProd(c.x - a.x, c.y - a.y, sx, sy) / den;
+    var u = crossProd(c.x - a.x, c.y - a.y, rx, ry) / den;
+    var eps = 1e-7;
+    if (t <= eps || t >= 1 - eps || u <= eps || u >= 1 - eps) return null;
+    return { x: a.x + t * rx, y: a.y + t * ry, t: t, u: u };
+  }
+
+  function pointInPoly(px, py, poly) {
+    var inside = false, i, j;
+    for (i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      var a = poly[i], b = poly[j];
+      if ((a.y > py) !== (b.y > py) && px < (b.x - a.x) * (py - a.y) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+  }
+
+  function distToSeg(px, py, a, b) {
+    var dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    var t = len2 > 0 ? Blog.clamp(((px - a.x) * dx + (py - a.y) * dy) / len2, 0, 1) : 0;
+    return Blog.dist(px, py, a.x + t * dx, a.y + t * dy);
+  }
+
+  /* ======================================================================
+     Plane graphs: rotation system -> faces -> radial graph
+     ====================================================================== */
+
+  /* pts: [{x, y}], edges: [[u, v]]. The drawing must be crossing-free. */
+  function makeGraph(pts, edges) {
+    var n = pts.length, adj = [], i;
+    for (i = 0; i < n; i++) adj.push([]);
+    edges.forEach(function (e) { adj[e[0]].push(e[1]); adj[e[1]].push(e[0]); });
+    /* the rotation system: neighbours of every vertex in cyclic order */
+    adj.forEach(function (list, v) {
+      list.sort(function (a, b) {
+        return Math.atan2(pts[a].y - pts[v].y, pts[a].x - pts[v].x) - Math.atan2(pts[b].y - pts[v].y, pts[b].x - pts[v].x);
+      });
+    });
+    var g = { n: n, pts: pts, edges: edges, adj: adj };
+    computeFaces(g);
+    return g;
+  }
+
+  /* Walk along a half-edge, then turn into the next edge around the vertex you
+     reach: that traces one face. Every half-edge lies on exactly one face. */
+  function computeFaces(g) {
+    var n = g.n, heFace = {}, faces = [], u, k;
+    for (u = 0; u < n; u++) {
+      for (k = 0; k < g.adj[u].length; k++) {
+        var key = u * n + g.adj[u][k];
+        if (heFace[key] != null) continue;
+        var walk = [], a = u, b = g.adj[u][k], guard = 0, area = 0;
+        while (heFace[a * n + b] == null && guard++ < 4 * g.edges.length + 8) {
+          heFace[a * n + b] = faces.length;
+          walk.push(a);
+          area += crossProd(g.pts[a].x, g.pts[a].y, g.pts[b].x, g.pts[b].y);
+          var list = g.adj[b], idx = list.indexOf(a);
+          var w = list[(idx - 1 + list.length) % list.length];
+          a = b; b = w;
+        }
+        faces.push({ id: faces.length, walk: walk, verts: uniq(walk), area: area / 2 });
+      }
+    }
+    /* with this turning rule every inner face has positive signed area and
+       the outer face is the one traced the other way round */
+    var outer = 0;
+    faces.forEach(function (f) { if (f.area < faces[outer].area) outer = f.id; });
+    var vfaces = [];
+    for (u = 0; u < n; u++) vfaces.push([]);
+    faces.forEach(function (f) { f.verts.forEach(function (v) { vfaces[v].push(f.id); }); });
+    faces.forEach(function (f) { f.pole = f.id === outer ? null : facePole(g, f); });
+    g.faces = faces; g.outer = outer; g.vfaces = vfaces; g.heFace = heFace;
+  }
+
+  /* a point well inside the face, used to draw face nodes and walls */
+  function facePole(g, f) {
+    var poly = f.walk.map(function (v) { return g.pts[v]; });
+    var minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity, mx = 0, my = 0;
+    poly.forEach(function (p) {
+      minx = Math.min(minx, p.x); maxx = Math.max(maxx, p.x);
+      miny = Math.min(miny, p.y); maxy = Math.max(maxy, p.y);
+      mx += p.x / poly.length; my += p.y / poly.length;
+    });
+    var best = { x: mx, y: my }, bestD = -1, steps = 9, i, j;
+    function consider(x, y) {
+      if (!pointInPoly(x, y, poly)) return;
+      var d = Infinity, q;
+      for (q = 0; q < poly.length; q++) d = Math.min(d, distToSeg(x, y, poly[q], poly[(q + 1) % poly.length]));
+      if (d > bestD) { bestD = d; best = { x: x, y: y }; }
+    }
+    consider(mx, my);
+    bestD *= 1.15;                       /* mild preference for the centroid */
+    for (i = 1; i < steps; i++) for (j = 1; j < steps; j++) {
+      consider(minx + (maxx - minx) * i / steps, miny + (maxy - miny) * j / steps);
+    }
+    return best;
+  }
+
+  function inducedGraph(g, verts) {
+    var index = {}, pts = [], edges = [];
+    verts.forEach(function (v, i) { index[v] = i; pts.push(g.pts[v]); });
+    g.edges.forEach(function (e) {
+      if (index[e[0]] != null && index[e[1]] != null) edges.push([index[e[0]], index[e[1]]]);
+    });
+    var sub = makeGraph(pts, edges);
+    sub.orig = verts.slice();
+    return sub;
+  }
+
+  /* connected components of g minus the vertices flagged in `gone` */
+  function components(g, gone) {
+    var comp = filled(g.n, -1), list = [], v;
+    for (v = 0; v < g.n; v++) {
+      if (comp[v] >= 0 || (gone && gone[v])) continue;
+      var members = [v], head = 0;
+      comp[v] = list.length;
+      while (head < members.length) {
+        var a = members[head++];
+        g.adj[a].forEach(function (b) {
+          if (comp[b] >= 0 || (gone && gone[b])) return;
+          comp[b] = list.length; members.push(b);
+        });
+      }
+      list.push(members);
+    }
+    return { comp: comp, list: list };
+  }
+
+  /* ======================================================================
+     Terminals, the wall BFS, and a max-flow cross-check
+     ====================================================================== */
+
+  /* Given S and T labels, make the outer boundary read S, S*, T, T* and
+     return the two free intervals (the start and end vertices of the wall). */
+  function finishTerminals(g, term) {
+    var walk = g.faces[g.outer].walk, len = walk.length, first = -1, i;
+    for (i = 0; i < len; i++) if (term[walk[i]] !== FREE) { first = i; break; }
+    if (first < 0) return null;
+    var runs = [], run = null, prev = term[walk[first]];
+    for (i = 1; i <= len; i++) {
+      var v = walk[(first + i) % len], t = term[v];
+      if (t === FREE) {
+        if (!run) run = { verts: [], prev: prev };
+        run.verts.push(v);
+      } else {
+        if (run) { run.next = t; runs.push(run); run = null; }
+        prev = t;
+      }
+    }
+    /* free boundary vertices between two stretches of the same terminal join it */
+    runs.forEach(function (r) {
+      if (r.prev === r.next) r.verts.forEach(function (x) { term[x] = r.prev; });
+    });
+    var sides = [];
+    runs.forEach(function (r) {
+      if (r.prev === r.next) return;
+      var vs = uniq(r.verts.filter(function (x) { return term[x] === FREE; }));
+      if (vs.length) sides.push(vs);
+    });
+    if (sides.length !== 2) return null;
+    for (i = 0; i < g.edges.length; i++) {
+      var e = g.edges[i];
+      if (term[e[0]] !== FREE && term[e[1]] !== FREE && term[e[0]] !== term[e[1]]) return null;
+    }
+    return { term: term, start: sides[0], end: sides[1] };
+  }
+
+  /* largest connected part of `verts` that touches the outer boundary */
+  function boundaryComponent(g, verts, onOuter) {
+    var inSet = {}, seen = {}, best = [];
+    verts.forEach(function (v) { inSet[v] = true; });
+    verts.forEach(function (v) {
+      if (seen[v]) return;
+      var members = [v], head = 0, touches = false;
+      seen[v] = true;
+      while (head < members.length) {
+        var a = members[head++];
+        if (onOuter[a]) touches = true;
+        g.adj[a].forEach(function (b) { if (inSet[b] && !seen[b]) { seen[b] = true; members.push(b); } });
+      }
+      if (touches && members.length > best.length) best = members;
+    });
+    return best;
+  }
+
+  /* geometric terminals, as in Inertial Flow: sort the vertices along a
+     direction; S is the first `count`, T the last `count` */
+  function pickTerminals(g, dx, dy, count) {
+    var n = g.n, order = [], i;
+    if (2 * count >= n || count < 1) return null;
+    for (i = 0; i < n; i++) order.push(i);
+    order.sort(function (a, b) {
+      return (g.pts[a].x * dx + g.pts[a].y * dy) - (g.pts[b].x * dx + g.pts[b].y * dy) || a - b;
+    });
+    var onOuter = {};
+    g.faces[g.outer].walk.forEach(function (v) { onOuter[v] = true; });
+    var s = boundaryComponent(g, order.slice(0, count), onOuter);
+    var t = boundaryComponent(g, order.slice(n - count), onOuter);
+    if (!s.length || !t.length) return null;
+    var term = filled(n, FREE);
+    s.forEach(function (v) { term[v] = SRC; });
+    t.forEach(function (v) { term[v] = SNK; });
+    return finishTerminals(g, term);
+  }
+
+  /* The heart of the post. A BFS in the radial graph from the start vertices:
+     one round goes from the current vertices into the faces they touch and on
+     to the free vertices of those faces. Terminals and the outer face are
+     never entered. The round in which an end vertex appears is the size of the
+     separator, and the parent pointers spell out the wall. */
+  function wallBFS(g, tm) {
+    var seenV = {}, seenF = {}, parV = {}, parF = {}, isEnd = {}, rounds = [], hit = -1, i;
+    tm.end.forEach(function (v) { isEnd[v] = true; });
+    var frontier = tm.start.slice().sort(numeric);
+    frontier.forEach(function (v) { seenV[v] = true; parV[v] = -1; });
+    rounds.push({ verts: frontier.slice(), faces: [] });
+    for (i = 0; i < frontier.length && hit < 0; i++) if (isEnd[frontier[i]]) hit = frontier[i];
+    while (hit < 0) {
+      var faces = [], next = [];
+      frontier.forEach(function (v) {
+        g.vfaces[v].forEach(function (f) {
+          if (f === g.outer || seenF[f]) return;
+          seenF[f] = true; parF[f] = v; faces.push(f);
+        });
+      });
+      faces.forEach(function (f) {
+        g.faces[f].verts.forEach(function (u) {
+          if (seenV[u] || tm.term[u] !== FREE) return;
+          seenV[u] = true; parV[u] = f; next.push(u);
+        });
+      });
+      if (!next.length) return null;
+      next.sort(numeric);
+      rounds.push({ verts: next, faces: faces });
+      for (i = 0; i < next.length && hit < 0; i++) if (isEnd[next[i]]) hit = next[i];
+      frontier = next;
+    }
+    var verts = [], wf = [], v = hit;
+    for (;;) {
+      verts.push(v);
+      if (parV[v] === -1) break;
+      wf.push(parV[v]);
+      v = parF[parV[v]];
+    }
+    verts.reverse(); wf.reverse();
+    return { k: rounds.length, rounds: rounds, verts: verts, faces: wf, parV: parV, parF: parF };
+  }
+
+  /* does X separate S from T? Returns the side sizes and a side label per vertex. */
+  function sidesOf(g, term, X) {
+    var gone = {}, side = filled(g.n, 2), queue = [], head = 0, ok = true, a = 0, v;
+    X.forEach(function (x) { gone[x] = true; side[x] = 0; });
+    for (v = 0; v < g.n; v++) if (term[v] === SRC && !gone[v]) { side[v] = 1; queue.push(v); }
+    while (head < queue.length) {
+      var cur = queue[head++];
+      a++;
+      if (term[cur] === SNK) ok = false;
+      g.adj[cur].forEach(function (b) {
+        if (gone[b] || side[b] === 1) return;
+        side[b] = 1; queue.push(b);
+      });
+    }
+    return { ok: ok, a: a, b: g.n - X.length - a, side: side };
+  }
+
+  /* Minimum S-T vertex cut by maximum flow, one augmenting path at a time
+     (every free vertex is split into in/out with capacity 1). Used as an
+     independent check of the wall, and to animate what flow-based cutters do. */
+  function minCutFlow(g, term) {
+    var n = g.n, N = 2 * n + 2, s = 2 * n, t = 2 * n + 1, BIG = 1e6;
+    var to = [], cap = [], out = [], i;
+    for (i = 0; i < N; i++) out.push([]);
+    function arc(a, b, c) {
+      out[a].push(to.length); to.push(b); cap.push(c);
+      out[b].push(to.length); to.push(a); cap.push(0);
+    }
+    for (i = 0; i < n; i++) {
+      arc(2 * i, 2 * i + 1, term[i] === FREE ? 1 : BIG);
+      if (term[i] === SRC) arc(s, 2 * i, BIG);
+      if (term[i] === SNK) arc(2 * i + 1, t, BIG);
+    }
+    g.edges.forEach(function (e) { arc(2 * e[0] + 1, 2 * e[1], BIG); arc(2 * e[1] + 1, 2 * e[0], BIG); });
+    var cap0 = cap.slice(), steps = [], value = 0, seen, last = [];
+
+    function search() {
+      var prevArc = filled(N, -1), queue = [s], head = 0;
+      seen = filled(N, false);
+      seen[s] = true;
+      while (head < queue.length && !seen[t]) {
+        var a = queue[head++];
+        for (var q = 0; q < out[a].length; q++) {
+          var id = out[a][q];
+          if (cap[id] <= 0 || seen[to[id]]) continue;
+          seen[to[id]] = true; prevArc[to[id]] = id; queue.push(to[id]);
+        }
+      }
+      var scanned = [];
+      for (var v = 0; v < n; v++) if (term[v] === FREE && (seen[2 * v] || seen[2 * v + 1])) scanned.push(v);
+      return { prevArc: prevArc, scanned: scanned };
+    }
+
+    function decompose() {
+      var flow = [], paths = [], q;
+      for (q = 0; q < cap.length; q += 2) flow[q] = cap0[q] - cap[q];
+      for (;;) {
+        var node = s, path = [], guard = 0, stuck = false;
+        while (node !== t && guard++ < 4 * N) {
+          var found = -1;
+          for (q = 0; q < out[node].length; q++) {
+            var id = out[node][q];
+            if (id % 2 === 0 && flow[id] > 0) { found = id; break; }
+          }
+          if (found < 0) { stuck = true; break; }
+          flow[found]--;
+          node = to[found];
+          if (node < 2 * n) {
+            var v = node >> 1;
+            if (path[path.length - 1] !== v) path.push(v);
+          }
+        }
+        if (stuck || node !== t) break;
+        paths.push(path);
+      }
+      return paths;
+    }
+
+    for (;;) {
+      var res = search();
+      if (!seen[t]) { last = res.scanned; break; }
+      var walk = [], node = t;
+      while (node !== s) {
+        var id = res.prevArc[node];
+        cap[id] -= 1; cap[id ^ 1] += 1;
+        node = to[id ^ 1];
+        if (node < 2 * n) {
+          var v = node >> 1;
+          if (walk[walk.length - 1] !== v) walk.push(v);
+        }
+      }
+      walk.reverse();
+      value++;
+      steps.push({ walk: walk, scanned: res.scanned, paths: decompose() });
+      if (value > n) break;
+    }
+    var cut = [];
+    for (i = 0; i < n; i++) if (term[i] === FREE && seen[2 * i] && !seen[2 * i + 1]) cut.push(i);
+    return { value: value, steps: steps, cut: cut, last: last };
+  }
+
+  /* fewest free vertices on a route along roads from a start to an end vertex */
+  function roadPath(g, tm) {
+    var par = {}, queue = [], head = 0, isEnd = {}, hit = -1;
+    tm.end.forEach(function (v) { isEnd[v] = true; });
+    tm.start.forEach(function (v) { par[v] = -1; queue.push(v); });
+    while (head < queue.length && hit < 0) {
+      var a = queue[head++];
+      if (isEnd[a]) { hit = a; break; }
+      g.adj[a].forEach(function (b) {
+        if (par[b] != null || tm.term[b] !== FREE) return;
+        par[b] = a; queue.push(b);
+      });
+    }
+    var path = [];
+    while (hit >= 0) { path.push(hit); hit = par[hit]; }
+    return path.reverse();
+  }
+
+  /* ======================================================================
+     A miniature PlanarCutter: candidates, scoring, nested dissection, CCH
+     ====================================================================== */
+
+  var DIRS = [[1, 0], [0, 1], [1, 1], [1, -1]];
+  var FRACS = [0.15, 0.25, 0.35];
+
+  /* try every candidate (direction, fraction), keep the wall with the
+     smallest expansion |X| / min(|A|, |B|); skip lopsided cuts if possible */
+  function bestSeparator(g) {
+    var best = null, fair = null;
+    DIRS.forEach(function (dir) {
+      FRACS.forEach(function (frac) {
+        var tm = pickTerminals(g, dir[0], dir[1], Math.max(1, Math.round(frac * g.n)));
+        if (!tm) return;
+        var wall = wallBFS(g, tm);
+        if (!wall) return;
+        var sd = sidesOf(g, tm.term, wall.verts);
+        var small = Math.min(sd.a, sd.b);
+        if (!sd.ok || small < 1) return;
+        var cand = { verts: wall.verts, wall: wall, tm: tm, a: sd.a, b: sd.b, score: wall.verts.length / small };
+        if (!best || cand.score < best.score - 1e-9) best = cand;
+        if (small >= 0.2 * g.n && (!fair || cand.score < fair.score - 1e-9)) fair = cand;
+      });
+    });
+    return fair || best;
+  }
+
+  /* fallback for tiny or awkward pieces: an exact min cut between the two
+     extreme vertices (the real system falls back to Inertial Flow) */
+  function fallbackSeparator(g) {
+    var out = null;
+    DIRS.forEach(function (dir) {
+      if (out || g.n < 3) return;
+      var lo = 0, hi = 0, v;
+      for (v = 1; v < g.n; v++) {
+        var p = g.pts[v].x * dir[0] + g.pts[v].y * dir[1];
+        if (p < g.pts[lo].x * dir[0] + g.pts[lo].y * dir[1]) lo = v;
+        if (p > g.pts[hi].x * dir[0] + g.pts[hi].y * dir[1]) hi = v;
+      }
+      if (lo === hi || g.adj[lo].indexOf(hi) >= 0) return;
+      var term = filled(g.n, FREE);
+      term[lo] = SRC; term[hi] = SNK;
+      var flow = minCutFlow(g, term);
+      if (flow.cut.length && sidesOf(g, term, flow.cut).ok) out = { verts: flow.cut };
+    });
+    return out;
+  }
+
+  /* nested dissection: parts first, separator last. level[v] is the depth of
+     the recursion at which v received its rank (1 = top separator). */
+  function nestedDissection(g) {
+    var order = [], level = filled(g.n, 0), maxLevel = 1;
+    function rec(verts, depth) {
+      maxLevel = Math.max(maxLevel, depth);
+      var sep = null, sub = null;
+      if (verts.length > 2) {
+        sub = inducedGraph(g, verts);
+        sep = bestSeparator(sub) || fallbackSeparator(sub);
+      }
+      if (!sep) {
+        verts.forEach(function (v) { level[v] = depth; order.push(v); });
+        return;
+      }
+      var gone = {};
+      sep.verts.forEach(function (x) { gone[x] = true; });
+      components(sub, gone).list.forEach(function (members) {
+        rec(members.map(function (x) { return sub.orig[x]; }), depth + 1);
+      });
+      sep.verts.forEach(function (x) { level[sub.orig[x]] = depth; order.push(sub.orig[x]); });
+    }
+    rec(components(g, null).list[0], 1);
+    return { order: order, level: level, maxLevel: maxLevel };
+  }
+
+  /* CCH from an order alone: contract in order; every pair of remaining
+     neighbours of the contracted vertex gets an arc (no weights, no witnesses).
+     The parent of v in the elimination tree is its lowest-ranked upward neighbour. */
+  function buildCCH(g, order) {
+    var n = g.n, rank = [], nb = [], up = [], parent = filled(n, -1), shortcuts = [], i;
+    order.forEach(function (v, r) { rank[v] = r; });
+    for (i = 0; i < n; i++) nb.push({});
+    g.edges.forEach(function (e) { nb[e[0]][e[1]] = true; nb[e[1]][e[0]] = true; });
+    order.forEach(function (v) {
+      var hi = Object.keys(nb[v]).map(Number).filter(function (u) { return rank[u] > rank[v]; });
+      hi.sort(function (a, b) { return rank[a] - rank[b]; });
+      up[v] = hi;
+      if (hi.length) parent[v] = hi[0];
+      for (var a = 0; a < hi.length; a++) for (var b = a + 1; b < hi.length; b++) {
+        if (nb[hi[a]][hi[b]]) continue;
+        nb[hi[a]][hi[b]] = true; nb[hi[b]][hi[a]] = true;
+        shortcuts.push([hi[a], hi[b], v]);
+      }
+    });
+    var depth = filled(n, 1), arcs = filled(n, 0), sumV = 0, sumA = 0, height = 0;
+    for (i = n - 1; i >= 0; i--) {
+      var v = order[i], p = parent[v];
+      depth[v] = p < 0 ? 1 : depth[p] + 1;
+      arcs[v] = up[v].length + (p < 0 ? 0 : arcs[p]);
+      sumV += depth[v]; sumA += arcs[v];
+      height = Math.max(height, depth[v]);
+    }
+    return {
+      rank: rank, up: up, parent: parent, shortcuts: shortcuts, depth: depth, arcs: arcs,
+      avgVerts: sumV / n, avgArcs: sumA / n, height: height, totalArcs: g.edges.length + shortcuts.length
+    };
+  }
+
+  /* ======================================================================
+     Maps
+     ====================================================================== */
+
+  /* a small road-like plane graph: a jittered grid with some streets removed,
+     a few diagonals, and optionally a river crossed by a few bridges */
+  function makeTown(seed, cols, rows, opts) {
+    opts = opts || {};
+    var rnd = Blog.rng(seed), pts = [], edges = [], i, j;
+    var jit = opts.jitter == null ? 0.2 : opts.jitter;
+    var river = opts.river == null ? -1 : opts.river, gap = river >= 0 ? 0.55 : 0;
+    var id = function (a, b) { return b * cols + a; };
+    for (j = 0; j < rows; j++) for (i = 0; i < cols; i++) {
+      pts.push({ x: i + rnd.range(-jit, jit), y: j + (j > river && river >= 0 ? gap : 0) + rnd.range(-jit, jit) });
+    }
+    var bridges = {};
+    if (river >= 0) {
+      /* the ring road crosses the river at both ends; a few more bridges in between */
+      var want = (opts.bridges || 3), tries = 0;
+      bridges[0] = true; bridges[cols - 1] = true;
+      while (Object.keys(bridges).length < want && tries++ < 200) {
+        var col = rnd.int(2, cols - 3);
+        if (!bridges[col - 1] && !bridges[col + 1]) bridges[col] = true;
+      }
+    }
+    var key = function (a, b) { return Math.min(a, b) * 10000 + Math.max(a, b); };
+    var has = {}, deg = filled(cols * rows, 0), protectedEdge = {};
+    function add(a, b) { edges.push([a, b]); has[key(a, b)] = true; deg[a]++; deg[b]++; }
+    for (j = 0; j < rows; j++) for (i = 0; i < cols; i++) {
+      if (i + 1 < cols) {
+        add(id(i, j), id(i + 1, j));
+        if (j === 0 || j === rows - 1) protectedEdge[key(id(i, j), id(i + 1, j))] = true;
+      }
+      if (j + 1 < rows && j !== river && (i === 0 || i === cols - 1)) protectedEdge[key(id(i, j), id(i, j + 1))] = true;
+      if (j + 1 < rows) {
+        if (j === river) { if (bridges[i]) { add(id(i, j), id(i, j + 1)); protectedEdge[key(id(i, j), id(i, j + 1))] = true; } }
+        else add(id(i, j), id(i, j + 1));
+      }
+    }
+    /* take some streets out, but keep the town connected and free of dead ends */
+    var drop = opts.drop == null ? 0.14 : opts.drop;
+    rnd.shuffle(edges.slice()).forEach(function (e) {
+      if (rnd() >= drop || protectedEdge[key(e[0], e[1])]) return;
+      if (deg[e[0]] <= 2 || deg[e[1]] <= 2) return;
+      var keep = edges.filter(function (x) { return x !== e; });
+      var adj = [];
+      for (var q = 0; q < pts.length; q++) adj.push([]);
+      keep.forEach(function (x) { adj[x[0]].push(x[1]); adj[x[1]].push(x[0]); });
+      var seen = {}, queue = [0], head = 0, count = 0;
+      seen[0] = true;
+      while (head < queue.length) {
+        var a = queue[head++]; count++;
+        adj[a].forEach(function (b) { if (!seen[b]) { seen[b] = true; queue.push(b); } });
+      }
+      if (count !== pts.length) return;
+      edges = keep; deg[e[0]]--; deg[e[1]]--; has[key(e[0], e[1])] = false;
+    });
+    /* a few diagonal streets, only where they cross nothing */
+    var diag = opts.diag == null ? 0.12 : opts.diag;
+    for (j = 0; j + 1 < rows; j++) for (i = 0; i + 1 < cols; i++) {
+      if (j === river || rnd() >= diag) continue;
+      var flip = rnd() < 0.5;
+      var a = flip ? id(i + 1, j) : id(i, j), b = flip ? id(i, j + 1) : id(i + 1, j + 1);
+      var clear = true;
+      edges.forEach(function (e) { if (clear && segHit(pts[a], pts[b], pts[e[0]], pts[e[1]])) clear = false; });
+      if (clear) add(a, b);
+    }
+    var g = makeGraph(pts, edges);
+    g.cols = cols; g.rows = rows;
+    if (river >= 0) g.river = { y0: river + jit + 0.04, y1: river + 1 + gap - jit - 0.04 };
+    return g;
+  }
+
+  /* the 24-vertex example from the paper: two terminal rows, four vertical
+     roads, and a zigzag road with spurs. y grows downward on screen. */
+  function makePaperGrid() {
+    var pts = [], edges = [], name = {}, x;
+    function vtx(label, px, py) { name[label] = pts.length; pts.push({ x: px, y: 4 - py }); }
+    function road() {
+      for (var q = 0; q + 1 < arguments.length; q++) edges.push([name[arguments[q]], name[arguments[q + 1]]]);
+    }
+    for (x = 0; x <= 6; x++) vtx('b' + x, x, 0);
+    for (x = 0; x <= 6; x++) vtx('t' + x, x, 4);
+    for (x = 0; x <= 6; x += 2) vtx('m' + x, x, 2);
+    vtx('p1', 0.67, 2.75); vtx('p2', 1.33, 2.75);
+    vtx('q1', 2.67, 1.25); vtx('q2', 3.33, 1.25);
+    vtx('r1', 4.67, 2.75); vtx('r2', 5.33, 2.75);
+    road('b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6');
+    road('t0', 't1', 't2', 't3', 't4', 't5', 't6');
+    for (x = 0; x <= 6; x += 2) road('b' + x, 'm' + x, 't' + x);
+    road('m0', 'p1', 'p2', 'm2', 'q1', 'q2', 'm4', 'r1', 'r2', 'm6');
+    road('p1', 't1'); road('p2', 't1'); road('r1', 't5'); road('r2', 't5'); road('q1', 'b3'); road('q2', 'b3');
+    var g = makeGraph(pts, edges);
+    g.cols = 7; g.rows = 5;
+    return g;
+  }
+
+  /* ======================================================================
+     Drawing helpers
+     ====================================================================== */
+
+  /* world -> canvas. The two axes may stretch a little differently so the map
+     fills tall phone canvases; the cyclic order of edges is unaffected. */
+  function makeView(g, w, h, padX, padY, padTop) {
+    var extra = (padTop || padY) - padY;
+    h -= extra;
+    var minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+    g.pts.forEach(function (p) {
+      minx = Math.min(minx, p.x); maxx = Math.max(maxx, p.x);
+      miny = Math.min(miny, p.y); maxy = Math.max(maxy, p.y);
+    });
+    var sx = (w - 2 * padX) / Math.max(1e-6, maxx - minx), sy = (h - 2 * padY) / Math.max(1e-6, maxy - miny);
+    sx = Math.min(sx, sy * 1.5); sy = Math.min(sy, sx * 1.5);
+    var ox = (w - sx * (maxx - minx)) / 2 - sx * minx, oy = extra + (h - sy * (maxy - miny)) / 2 - sy * miny;
+    return {
+      sx: sx, sy: sy,
+      X: function (p) { return ox + p.x * sx; },
+      Y: function (p) { return oy + p.y * sy; }
+    };
+  }
+
+  function pickVertex(g, V, p, reach) {
+    var best = -1, bestD = reach;
+    g.pts.forEach(function (q, v) {
+      var d = Blog.dist(p.x, p.y, V.X(q), V.Y(q));
+      if (d < bestD) { bestD = d; best = v; }
+    });
+    return best;
+  }
+
+  function drawRiver(ctx, g, V, w, c) {
+    if (!g.river) return;
+    var y0 = V.Y({ x: 0, y: g.river.y0 }), y1 = V.Y({ x: 0, y: g.river.y1 });
+    D.roundRect(ctx, 4, y0, w - 8, y1 - y0, Math.min(14, (y1 - y0) / 2), Blog.alpha(c.blue, c.dark ? 0.16 : 0.1));
+    D.text(ctx, 'river', 14, (y0 + y1) / 2, { font: Blog.font(10.5, 600), color: Blog.alpha(c.blue, 0.9), align: 'left' });
+  }
+
+  /* is the straight segment between two vertices of a face inside that face? */
+  function straightInside(g, f, a, b) {
+    var pa = g.pts[a], pb = g.pts[b], i;
+    var poly = g.faces[f].walk.map(function (v) { return g.pts[v]; });
+    if (!pointInPoly((pa.x + pb.x) / 2, (pa.y + pb.y) / 2, poly)) return false;
+    for (i = 0; i < g.edges.length; i++) {
+      if (segHit(pa, pb, g.pts[g.edges[i][0]], g.pts[g.edges[i][1]])) return false;
+    }
+    return true;
+  }
+
+  /* A polyline from a to b that stays inside face f (both points lie on its
+     border). Used to draw walls through awkwardly shaped faces: sample the
+     face, connect samples that see each other, take the shortest chain. */
+  function routeInFace(g, f, a, b) {
+    var face = g.faces[f], poly = face.walk.map(function (v) { return g.pts[v]; });
+    var minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity, i, j;
+    poly.forEach(function (p) {
+      minx = Math.min(minx, p.x); maxx = Math.max(maxx, p.x);
+      miny = Math.min(miny, p.y); maxy = Math.max(maxy, p.y);
+    });
+    function clearance(x, y) {
+      var d = Infinity;
+      for (var q = 0; q < poly.length; q++) d = Math.min(d, distToSeg(x, y, poly[q], poly[(q + 1) % poly.length]));
+      return d;
+    }
+    var margin = Math.min(maxx - minx, maxy - miny) * 0.11;
+    /* p sees q if the segment stays inside the face and keeps its distance
+       from the border (a and b sit on the border, so the rule relaxes near them) */
+    function sees(p, q) {
+      var ts = [0.2, 0.4, 0.5, 0.6, 0.8], k;
+      for (k = 0; k < ts.length; k++) {
+        var x = Blog.lerp(p.x, q.x, ts[k]), y = Blog.lerp(p.y, q.y, ts[k]);
+        var need = Math.min(margin, 0.25 * Math.min(Blog.dist(x, y, a.x, a.y), Blog.dist(x, y, b.x, b.y)));
+        if (!pointInPoly(x, y, poly) || clearance(x, y) < Math.max(need, 1e-3)) return false;
+      }
+      for (var e = 0; e < g.edges.length; e++) {
+        if (segHit(p, q, g.pts[g.edges[e][0]], g.pts[g.edges[e][1]])) return false;
+      }
+      return true;
+    }
+    if (sees(a, b)) return [a, b];
+    var steps = 11, nodes = [a, b];
+    for (i = 1; i < steps; i++) for (j = 1; j < steps; j++) {
+      var x = minx + (maxx - minx) * i / steps, y = miny + (maxy - miny) * j / steps;
+      if (pointInPoly(x, y, poly) && clearance(x, y) >= margin) nodes.push({ x: x, y: y });
+    }
+    var n = nodes.length, dist = filled(n, Infinity), prev = filled(n, -1), done = filled(n, false);
+    var reach = 1.6 * Math.max((maxx - minx) / steps, (maxy - miny) / steps);
+    dist[0] = 0;
+    for (;;) {
+      var cur = -1;
+      for (i = 0; i < n; i++) if (!done[i] && dist[i] < Infinity && (cur < 0 || dist[i] < dist[cur])) cur = i;
+      if (cur < 0 || cur === 1) break;
+      done[cur] = true;
+      for (i = 0; i < n; i++) {
+        if (done[i]) continue;
+        var d = Blog.dist(nodes[cur].x, nodes[cur].y, nodes[i].x, nodes[i].y);
+        if (cur > 1 && i > 1 && d > reach) continue;
+        if (dist[cur] + d >= dist[i] || !sees(nodes[cur], nodes[i])) continue;
+        dist[i] = dist[cur] + d; prev[i] = cur;
+      }
+    }
+    if (dist[1] === Infinity) return [a, face.pole, b];
+    var chain = [];
+    for (i = 1; i >= 0; i = prev[i]) chain.push(nodes[i]);
+    chain.reverse();
+    /* pull the chain tight: jump to the farthest point still in sight */
+    var out = [chain[0]], at = 0;
+    while (at < chain.length - 1) {
+      var far = at + 1;
+      for (j = chain.length - 1; j > at + 1; j--) if (sees(chain[at], chain[j])) { far = j; break; }
+      out.push(chain[far]); at = far;
+    }
+    return out;
+  }
+
+  /* the wall as a smooth curve: vertex, through a face, vertex, ... */
+  function wallCurve(g, V, wall) {
+    var out = [], i, q;
+    for (i = 0; i + 1 < wall.verts.length; i++) {
+      var a = g.pts[wall.verts[i]], b = g.pts[wall.verts[i + 1]], pole = g.faces[wall.faces[i]].pole;
+      var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, cx, cy;
+      if (!straightInside(g, wall.faces[i], wall.verts[i], wall.verts[i + 1])) {
+        /* a bent face: thread the wall through its interior */
+        routeInFace(g, wall.faces[i], a, b).forEach(function (p, idx) {
+          if (idx > 0 || i === 0) out.push({ x: V.X(p), y: V.Y(p) });
+        });
+        continue;
+      }
+      cx = Blog.lerp(mx, pole.x, 0.4); cy = Blog.lerp(my, pole.y, 0.4);
+      for (q = (i === 0 ? 0 : 1); q <= 14; q++) {
+        var t = q / 14, u = 1 - t;
+        out.push({
+          x: V.X({ x: u * u * a.x + 2 * u * t * cx + t * t * b.x, y: 0 }),
+          y: V.Y({ x: 0, y: u * u * a.y + 2 * u * t * cy + t * t * b.y })
+        });
+      }
+    }
+    if (!out.length && wall.verts.length) out.push({ x: V.X(g.pts[wall.verts[0]]), y: V.Y(g.pts[wall.verts[0]]) });
+    return out;
+  }
+
+  /* stroke the first `frac` of a polyline given in canvas pixels */
+  function strokePoly(ctx, pts, frac, color, width, dash) {
+    if (pts.length < 2) return;
+    var total = 0, i, lens = [];
+    for (i = 1; i < pts.length; i++) { lens.push(Blog.dist(pts[i - 1].x, pts[i - 1].y, pts[i].x, pts[i].y)); total += lens[i - 1]; }
+    var left = total * Blog.clamp(frac, 0, 1);
+    ctx.save();
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    if (dash) ctx.setLineDash(dash);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (i = 1; i < pts.length && left > 0; i++) {
+      var f = Math.min(1, left / (lens[i - 1] || 1));
+      ctx.lineTo(Blog.lerp(pts[i - 1].x, pts[i].x, f), Blog.lerp(pts[i - 1].y, pts[i].y, f));
+      left -= lens[i - 1];
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function verts(n) { return n + (n === 1 ? ' vertex' : ' vertices'); }
+
+  /* a tap or click that is not the start of a scroll or drag */
+  function onTap(el, fn) {
+    var from = null;
+    Blog.pointer(el, {
+      down: function (p) { from = p; },
+      up: function (p) {
+        if (from && Blog.dist(p.x, p.y, from.x, from.y) < 10) fn(from);
+        from = null;
+      }
+    });
+  }
+
+  function setReadout(el, items) {
+    el.innerHTML = items.map(function (it) { return '<span>' + it[0] + ' <b>' + it[1] + '</b></span>'; }).join('');
+  }
+

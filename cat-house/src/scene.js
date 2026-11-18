@@ -668,14 +668,14 @@ window.DOLL = window.DOLL || {};
     for (let i = 0; i < 9; i++) PX.rect(ctx, x + 13 + Math.round(i * 0.34), y - 9 + i, 3, 1, C(night, '#B79AD8'));
     PX.rect(ctx, x + 13, y - 7, 3, 1, 'rgba(255,255,255,.4)');
 
-    // 番茄钟：专注时是睁着眼的红番茄、每秒轻轻点一下；休息时变成闭着眼的青番茄；底下搁板边上一条进度
+    // 番茄钟：专注时是睁着眼的红番茄，休息时变成闭着眼的青番茄；底下搁板边上一条慢慢走的进度。
+    // 番茄自己不动：计时的时候眼角一直有东西在跳，很打扰人
     const Pm = D.Pomo, tp = S.tomatoPos(L);
-    const run = Pm && Pm.running, brk = Pm && Pm.active && Pm.phase !== 'focus';
-    const bob = run && Math.floor(Date.now() / 500) % 2 ? 1 : 0;
+    const brk = Pm && Pm.active && Pm.phase !== 'focus';
     if (S.hot === 'tomato') PX.ellipse(ctx, tp.x + 6, tp.y + 6, 9, 8, 'rgba(255,255,255,.4)');
     PX.rect(ctx, tp.x + 2, tp.y + 11, 9, 1, 'rgba(60,44,66,.25)');
-    PX.tomato(ctx, tp.x, tp.y - bob, brk, brk ? 'shut' : 'open');
-    if (night) PX.ellipse(ctx, tp.x + 6, tp.y + 6 - bob, 7, 6, 'rgba(40,32,62,.35)');
+    PX.tomato(ctx, tp.x, tp.y, brk, brk ? 'shut' : 'open');
+    if (night) PX.ellipse(ctx, tp.x + 6, tp.y + 6, 7, 6, 'rgba(40,32,62,.35)');
     if (Pm && Pm.active) {
       PX.rect(ctx, tp.x, y + 1, 13, 1, C(night, '#7A5638'));
       PX.rect(ctx, tp.x, y + 1, Math.round(13 * U.clamp(Pm.progress(), 0, 1)), 1, brk ? '#8CC870' : '#F2705E');

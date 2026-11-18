@@ -245,6 +245,7 @@ window.DOLL = window.DOLL || {};
     const brk = P.phase !== 'focus';
     pomoLbl.textContent = P.active ? P.fmt() : 'Pomodoro';
     pomoBar.style.width = (P.active ? U.clamp(P.progress(), 0, 1) * 100 : 0) + '%';
+    pomoBtn.classList.toggle('active', P.active);      // 计时中：时间那一格固定宽度，数字变了按钮也不会忽宽忽窄
     pomoBtn.classList.toggle('on', P.running);
     pomoBtn.classList.toggle('brk', P.active && brk);
     pomoBtn.classList.toggle('paused', P.active && !P.running);

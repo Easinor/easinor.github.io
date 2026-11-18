@@ -1,0 +1,48 @@
+---
+layout: default
+---
+
+{% include base_path %}
+{% assign blog_v = site.time | date: "%Y%m%d%H%M" %}
+
+<div class="blog blog-post" role="main" data-post="{{ page.slug_id | escape }}" style="--post-accent: {{ page.accent | default: '#2f7f93' }}; --post-accent-dark: {{ page.accent_dark | default: page.accent | default: '#52adc8' }};">
+
+  <div class="blog-progress" aria-hidden="true"><span></span></div>
+
+  <header class="blog-hero">
+    <a class="blog-back" href="{{ base_path }}/blog/">&larr; All posts</a>
+    <p class="blog-kicker">
+      {% if page.venue %}<span class="blog-chip blog-chip--accent">{{ page.venue | escape }}</span>{% endif %}
+      {% for topic in page.topics %}<span class="blog-chip">{{ topic | escape }}</span>{% endfor %}
+    </p>
+    <h1 class="blog-title">{{ page.title | escape }}</h1>
+    {% if page.lead %}<p class="blog-lead">{{ page.lead | escape }}</p>{% endif %}
+    {% if page.authors %}<p class="blog-authors">{{ page.authors | escape }}</p>{% endif %}
+    {% if page.links %}
+    <p class="blog-links">
+      {% for link in page.links %}<a class="blog-link" href="{{ link.url | escape }}" target="_blank" rel="noopener">{{ link.label | escape }} <span aria-hidden="true">&nearr;</span></a>{% endfor %}
+    </p>
+    {% endif %}
+  </header>
+
+  <nav class="blog-toc" aria-label="On this page"></nav>
+
+  <article class="blog-body">
+    {{ content }}
+  </article>
+
+  <nav class="blog-pager" aria-label="More posts">
+    {% assign posts = site.blog | sort: "order" %}
+    {% for post in posts %}
+      {% if post.url != page.url %}
+      <a class="blog-pager__item" href="{{ base_path }}{{ post.url }}" style="--post-accent: {{ post.accent }}; --post-accent-dark: {{ post.accent_dark | default: post.accent }};">
+        <span class="blog-pager__kicker">{{ post.venue | escape }}</span>
+        <span class="blog-pager__title">{{ post.short_title | default: post.title | escape }}</span>
+      </a>
+      {% endif %}
+    {% endfor %}
+  </nav>
+</div>
+
+<script src="{{ base_path }}/assets/blog/js/common.js?v={{ blog_v }}"></script>
+{% if page.script %}<script src="{{ base_path }}/assets/blog/js/{{ page.script }}?v={{ blog_v }}"></script>{% endif %}

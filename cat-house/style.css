@@ -135,6 +135,7 @@ body.mini #account { display: none; }
 }
 #pomo-chip canvas { display: block; flex: none; }
 #pomo-chip i { position: absolute; left: 0; bottom: 0; height: 3px; background: #EC6A58; }
+#pomo-chip.active span { display: inline-block; min-width: 42px; text-align: center; }
 #pomo-chip.on { background: #FFE9E4; }
 #pomo-chip.brk { background: #E9F5E2; }
 #pomo-chip.brk i { background: #7FC47A; }

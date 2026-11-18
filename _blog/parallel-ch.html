@@ -1,0 +1,370 @@
+---
+title: "SPoCH: Building Contraction Hierarchies in Parallel"
+short_title: "Parallel Contraction Hierarchies"
+slug_id: ch
+order: 2
+date: 2025-06-08
+venue: "ICS 2025"
+topics: ["Shortest paths", "Road networks"]
+lead: "A contraction hierarchy answers shortest-path queries on a continent-sized road network in microseconds, but building one for North America takes a sequential builder 22 to 41 minutes. SPoCH builds the same kind of index in 23 seconds on 96 cores (192 hyperthreads)."
+summary: "Contraction hierarchies answer route queries in microseconds but take a long time to build. Contract a graph yourself, step through a query, and see what it takes to make the build scale to 96 cores."
+excerpt: "An interactive explainer of SPoCH, our ICS 2025 paper on efficient and scalable parallel construction of contraction hierarchies."
+authors: "Zijin Wan, Xiaojun Dong, Letong Wang, Enzuo Zhu, Yan Gu, Yihan Sun"
+accent: "#b85400"
+accent_dark: "#ffa95c"
+links:
+  - label: "Paper (arXiv)"
+    url: "https://arxiv.org/abs/2412.18008"
+  - label: "ACM DL"
+    url: "https://doi.org/10.1145/3721145.3725744"
+  - label: "Code"
+    url: "https://github.com/ucrparlay/Parallel-Contraction-Hierarchy"
+script: ch.js
+---
+
+<style>
+  .blog-post[data-post="ch"] .ch-stats .stat-num { font-size: 1.45rem; white-space: nowrap; }
+  .blog-post[data-post="ch"] .ch-mem { margin-top: 1.6rem; margin-bottom: 1.6rem; padding: 1rem 1.1rem; border: 1px solid var(--b-line); border-radius: 14px; background: var(--b-panel); }
+  .blog-post[data-post="ch"] .ch-mem__title { display: block; margin: 0 0 0.45rem; color: var(--b-muted); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .blog-post[data-post="ch"] .ch-mem__row { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 0.9rem; }
+  .blog-post[data-post="ch"] .ch-group { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 4px; }
+  .blog-post[data-post="ch"] .ch-cell { display: inline-flex; align-items: center; justify-content: center; min-width: 2.6em; height: 2.1em; padding: 0 0.45em; border: 1px solid var(--b-line-strong); border-radius: 6px; background: var(--b-stage); color: var(--b-ink); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.76rem; font-weight: 600; white-space: nowrap; }
+  .blog-post[data-post="ch"] .ch-cell--head { border-color: transparent; background: transparent; color: var(--b-muted); min-width: 0; padding-left: 0; }
+  .blog-post[data-post="ch"] .ch-cell--dead { color: var(--b-faint); border-style: dashed; text-decoration: line-through; }
+  .blog-post[data-post="ch"] .ch-cell--new { border-color: var(--v-orange); color: var(--t-orange); }
+  .blog-post[data-post="ch"] .ch-cell--empty { color: var(--b-faint); border-style: dotted; }
+  .blog-post[data-post="ch"] .ch-mem p { margin: 0; color: var(--b-muted); font-size: 0.78rem; line-height: 1.5; }
+  .blog-post[data-post="ch"] ol.ch-steps { padding-left: 1.4rem; }
+  .blog-post[data-post="ch"] ol.ch-steps li { margin-bottom: 0.6rem; }
+  .blog-post[data-post="ch"] p.ch-key { margin-top: -0.6rem; color: var(--b-muted); font-size: 0.78rem; line-height: 1.5; }
+  .blog-post[data-post="ch"] th abbr { text-decoration: none; border: 0; }
+  .blog-post[data-post="ch"] th small { display: block; font-size: 0.92em; font-weight: 600; letter-spacing: 0; text-transform: none; }
+</style>
+
+<section id="problem" data-toc="The problem">
+  <h2><span class="num">01</span>A continent is too big for Dijkstra</h2>
+
+  <p>Ask a map for the fastest route from Riverside to Boston. Underneath, that is a <strong>shortest-path query</strong> on a graph: intersections are <em>vertices</em>, road segments are <em>edges</em>, and each edge has a <em>weight</em>, its travel time. The OpenStreetMap road network of North America has 87 million vertices and 113 million edges.</p>
+
+  <p>The textbook tool is <strong>Dijkstra&rsquo;s algorithm</strong>. It grows a ball around the start, <em>settling</em> vertices (fixing their final distance) in order of distance until it reaches the destination. For a cross-country trip, that ball covers a large part of the continent. In our measurements, one Dijkstra query on North America takes <strong>7.20 seconds</strong> on average, and a parallel shortest-path algorithm (&Delta;-stepping) still takes 0.320 seconds.</p>
+
+  <p>The standard answer is to pay once, up front. <strong>Contraction hierarchies</strong> (CH), introduced by Geisberger et al. in 2008, spend some <em>preprocessing</em> time to build an <em>index</em>: the original graph plus some extra edges. With that index, the same query takes 93.3 <em>micro</em>seconds, about 77,000&times; faster than Dijkstra, and the answer is still exact.</p>
+
+  <div class="stats ch-stats" data-reveal>
+    <div class="stat"><span class="stat-num">7.20 s</span><span class="stat-label">one Dijkstra query on North America (87 million vertices)</span></div>
+    <div class="stat"><span class="stat-num">93.3 &micro;s</span><span class="stat-label">the same query on a contraction hierarchy</span></div>
+    <div class="stat"><span class="stat-num">22&ndash;41&nbsp;min</span><span class="stat-label">to build that hierarchy with a sequential builder</span></div>
+    <div class="stat"><span class="stat-num">23.1 s</span><span class="stat-label">to build it with SPoCH on 96 cores (192 hyperthreads)</span></div>
+  </div>
+
+  <p>Here is the effect on a small made-up road network. The first map runs plain Dijkstra. The second runs a CH query on a hierarchy that your browser builds for this network when the page loads (one vertex at a time; the parallel build comes later).</p>
+
+  <figure class="demo" id="demo-space">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Same question, two search spaces</h3>
+      <p class="demo-hint">Drag <b>s</b> or <b>t</b>, or tap anywhere to move the nearer one. With the keyboard: arrow keys, then Enter. Thick gray roads are fast arterials.</p>
+    </div>
+    <div class="demo-split">
+      <div class="demo-stage"><span class="demo-pane-label">Dijkstra</span><canvas aria-label="Road network with the vertices settled by Dijkstra's algorithm. Arrow keys move a cursor between intersections; Enter moves the nearer endpoint there."></canvas></div>
+      <div class="demo-stage"><span class="demo-pane-label">Contraction hierarchy query</span><canvas aria-label="The same road network with the vertices settled by a contraction hierarchy query. Arrow keys move a cursor between intersections; Enter moves the nearer endpoint there."></canvas></div>
+    </div>
+    <div class="demo-controls"></div>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--v-blue)"></span>settled by the search from s</span>
+      <span><span class="sw" style="background: var(--v-purple)"></span>settled by the search from t (CH only)</span>
+      <span><span class="sw" style="background: transparent; box-shadow: inset 0 0 0 2px var(--v-green)"></span>where the two searches meet</span>
+      <span><span class="sw line" style="background: var(--v-green)"></span>shortest path</span>
+    </div>
+    <figcaption>Plain one-directional Dijkstra floods the map outward from s. The CH query runs two small searches that jump along straight lines (the extra edges, called shortcuts in the next section) and meet at the highest-ranked vertex on the route. This network has 390 vertices, so for far-apart endpoints the CH query settles roughly ten times fewer vertices. On North America the measured gap in query time is about 77,000&times; (7.20 s for Dijkstra, 93.3 &micro;s on the hierarchy).</figcaption>
+  </figure>
+
+  <p>Building that index is the expensive step. This post explains how a CH works (sections <a href="#contraction">2</a> and <a href="#query">3</a>), where the build time goes (<a href="#building">section 4</a>), and the two ideas in our ICS 2025 paper, <strong>SPoCH</strong>, that let the build use all the cores of a large machine (sections <a href="#rounds">5</a> to <a href="#graph">7</a>).</p>
+</section>
+
+<section id="contraction" data-toc="Contraction">
+  <h2><span class="num">02</span>Contraction: remove a vertex, patch the hole</h2>
+
+  <p>The idea behind CH is to delete unimportant vertices from the graph one at a time, without ever changing the distance between the vertices that remain.</p>
+
+  <p>To <strong>contract</strong> a vertex <em>v</em>, look at every pair of its neighbors, <em>a</em> and <em>b</em>. If the route a&ndash;v&ndash;b is a shortest path from a to b, deleting v could make a and b farther apart. So we patch the hole: add a new edge a&ndash;b whose weight is the length of that route. This new edge is a <span class="k k-orange">shortcut</span>.</p>
+
+  <p>If instead there is a strictly shorter way from a to b that avoids v, no shortcut is needed. That other route is called a <span class="k k-green">witness</span>, and the small Dijkstra run that looks for it, stopping as soon as it has reached b, is a <strong>witness path search</strong>. On a tie we add the shortcut anyway: an extra edge of exactly the right length never changes a distance.</p>
+
+  <p>The graph we are working on, meaning the vertices not yet contracted plus the shortcuts added so far, is called the <strong>overlay graph</strong>. (Real road graphs are directed, because of one-way streets. The pictures here use two-way streets.) Try it:</p>
+
+  <figure class="demo" id="demo-contract">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Contract it yourself</h3>
+      <p class="demo-hint">Click a vertex to preview its witness searches, click it again to contract it (or use the arrow keys and Enter). Can you finish with a single shortcut?</p>
+    </div>
+    <div class="demo-stage"><canvas aria-label="A ten-vertex weighted graph that can be contracted one vertex at a time. Arrow keys move between vertices; Enter previews a vertex, and Enter again contracts it."></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw line" style="background: var(--v-orange)"></span>shortcut (dashed)</span>
+      <span><span class="sw line" style="background: var(--v-green)"></span>witness: a shorter way around</span>
+      <span><span class="sw" style="background: var(--v-pink)"></span>selected vertex and its edges</span>
+    </div>
+    <figcaption>Every witness search runs live on the current overlay graph, so the answer depends on what you removed earlier. Contracting C first needs one shortcut (B&ndash;D), because the pairs B&ndash;G and D&ndash;G have shorter ways around. Contracting the two busiest vertices, G and F, first already costs ten shortcuts.</figcaption>
+  </figure>
+
+  <p>When every vertex has been contracted, the <strong>contraction hierarchy</strong> is the original edges, plus all the shortcuts, plus the order in which the vertices were removed. That order is each vertex&rsquo;s <em>rank</em>: removed later means ranked higher.</p>
+
+  <h3>The order decides the cost</h3>
+
+  <p><em>Any</em> order gives a correct hierarchy. But the two preset orders in the figure end with 2 and 16 shortcuts on the same 13-edge graph, and the best possible order needs just 1. More shortcuts generally mean a bigger index and slower queries.</p>
+
+  <p>So builders choose the order with a heuristic <strong>score</strong>, and always contract a vertex with a low score. The main ingredient is the <strong>edge difference</strong>: the shortcuts that contracting v would add, minus the edges at v that would go away. The figure shows it in the status line when you select a vertex.</p>
+
+  <p class="callout"><span class="callout-label">Where the time goes</span>To know a vertex&rsquo;s edge difference you must <em>simulate</em> contracting it, which means running its witness searches without changing the graph. And whenever a vertex is contracted, its neighbors&rsquo; edge lists change, so their scores must be recomputed. In a sequential builder, scoring, not contracting, is the most time-consuming part.</p>
+
+  <p>Real builders, ours included, add a few more terms to the score. The figures in this post use the edge difference alone, except the first map, whose score also counts how many layers of contracted vertices already lie below a vertex, to keep the hierarchy shallow.</p>
+</section>
+
+<section id="query" data-toc="Queries">
+  <h2><span class="num">03</span>Queries only climb</h2>
+
+  <p>Why would extra edges make queries <em>faster</em>? Because the hierarchy lets a query ignore almost all of them.</p>
+
+  <p>Call an edge <strong>upward</strong> when it leads from a vertex to a higher-ranked one. A CH query from s to t runs two Dijkstra searches at once: a <span class="k k-blue">forward</span> search from s and a <span class="k k-purple">backward</span> search from t. <em>Both</em> may only follow upward edges. (On one-way streets the backward search follows edges against their direction; it still only climbs.) Every vertex reached from both sides is a candidate meeting point, and the answer is the best candidate.</p>
+
+  <p>This works because every shortest path can be rewritten as one that goes up and then down. Take any shortest path and look at a &ldquo;valley&rdquo; on it: a vertex ranked lower than both of its neighbors on the path. That vertex was contracted while both neighbors were still present, and it lay on a shortest path between them, so a shortcut was added across it at that moment, unless an edge at least as short was already there. Replace the valley by that edge and repeat. What remains has a single peak, and both searches reach it.</p>
+
+  <p>Why are the two searches small? The intuition: vertices that few routes pass through are contracted early, and the ones contracted last are those that many shortest paths run through, such as junctions of major roads. After a few upward steps a search is on that sparse top layer. You saw this in the first map, where both searches quickly end up on the thick arterials.</p>
+
+  <p>Below is the hierarchy of the same ten-vertex graph, drawn with higher-ranked vertices higher up. Several vertices share a level because this hierarchy was built in rounds that remove several vertices at once (<a href="#rounds">section 5</a>). No edge joins two vertices of the same level, so &ldquo;upward&rdquo; is still well defined. With only ten vertices the searches cannot be small; the figure is here to show the rule.</p>
+
+  <figure class="demo" id="demo-query">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Two searches that only go up</h3>
+      <p class="demo-hint">Press Play, or step with the arrow buttons. Then tick &ldquo;Stop at the first meeting&rdquo; and replay D &rarr; I. Click a vertex (or use the arrow keys and Enter) to choose your own s and t.</p>
+    </div>
+    <div class="demo-stage"><canvas class="tall" aria-label="The contraction hierarchy of the example graph drawn by level, with a step-by-step bidirectional query. Arrow keys move between vertices; Enter makes the vertex the start or the target."></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--v-blue)"></span>forward search from s (label on the left)</span>
+      <span><span class="sw" style="background: var(--v-purple)"></span>backward search from t (label on the right)</span>
+      <span><span class="sw" style="background: transparent; box-shadow: inset 0 0 0 2px var(--v-gray)"></span>hollow label: reached; filled: settled</span>
+      <span><span class="sw line" style="background: var(--v-orange)"></span>shortcut</span>
+      <span><span class="sw line" style="background: var(--v-green)"></span>answer</span>
+    </div>
+    <figcaption>On D &rarr; I the searches first meet at G with total 12. Then B gives 11. Only H, the very top of the hierarchy, gives the true distance 9. A query must keep the best meeting &mu; found so far, and a side may stop only when the smallest label left in its queue is at least &mu;.</figcaption>
+  </figure>
+
+  <p>An answer path may contain shortcuts. To get real roads back, each shortcut remembers the vertex it bypassed and is <em>unpacked</em> into the two edges it replaced, recursively (standard CH practice; the figure does it in its last status line). Nothing here is approximate: a CH query returns the exact shortest distance.</p>
+</section>
+
+<section id="building" data-toc="Build cost">
+  <h2><span class="num">04</span>Building is the expensive part</h2>
+
+  <p>On North America, two well-engineered sequential builders take 1341 seconds (the CH builder in KIT&rsquo;s ULTRA-PHAST code, labeled PHAST below) and 2466 seconds (RoutingKit). A CH is also the starting point of other route-planning techniques, such as transit node routing and hub labeling, so many systems pay this cost, and a long build ties up computing resources and limits how large a graph the method can handle.</p>
+
+  <p>In 2009, a year after CH appeared, Vetter observed how many cores can share the work: <strong>vertices that share no edge can be contracted at the same time</strong>. Almost every parallel CH builder since follows his outline. Work in <em>rounds</em>; in each round, score the vertices, select a set of low-score vertices with no edges among them, and contract the whole set.</p>
+
+  <p>We measured two open-source parallel builders on a machine with 96 cores (192 hyperthreads, two hardware threads per core). On North America, OSRM builds the hierarchy in 307 seconds, 4.4&times; faster than the sequential PHAST build, and CH-Constructor (by B&uuml;hler and Nusser) takes 1527 seconds at its best setting, 8 threads. On the three graphs where we recorded their scaling curves (a road network, a chain and a <em>k</em>-nearest-neighbor graph), neither got faster beyond about 16 threads.</p>
+
+  <p>Contraction itself parallelizes well. In our analysis, what holds the build back is the work around it.</p>
+
+  <ul>
+    <li><strong>Scoring repeats searches, one whole vertex at a time.</strong> After each round, every neighbor of a contracted vertex needs a new score. In both builders each rescoring runs its own witness searches and keeps none of the distances, so two vertices that need a search from the same source both run it. A likely reason OSRM stops scaling is granularity: it handles the affected vertices in parallel, but all the searches of one vertex on one thread. Late in the build only a few vertices with many neighbors remain; if three are left, three threads work and the rest wait.</li>
+    <li><strong>Many threads must edit the same graph.</strong> Two vertices contracted in the same round often share a neighbor, and both want to add shortcuts to that neighbor&rsquo;s edge list at once. CH-Constructor inserts shortcuts through a lock-based structure; in our runs its contraction step stopped improving beyond 16 threads. (Its best total time is at 8 threads for a separate reason: a step that resets its arrays every round grows with the thread count.) OSRM avoids concurrent inserts through its selection rule, which <a href="#graph">section 7</a> comes back to.</li>
+  </ul>
+
+  <p>SPoCH keeps Vetter&rsquo;s rounds and changes these two things. <a href="#rounds">Section 5</a> looks at the rounds; sections <a href="#localsearch">6</a> and <a href="#graph">7</a> are the paper&rsquo;s contributions.</p>
+</section>
+
+<section id="rounds" data-toc="Rounds">
+  <h2><span class="num">05</span>Rounds: contract many vertices at once</h2>
+
+  <p>A set of vertices with no edge between any two of them is called an <strong>independent set</strong>. Why does a round need one? Suppose two neighbors u and v were contracted together. Contracting u may require a shortcut that ends at v, but v is being deleted at the same moment, so the shortcut would point at a vertex that no longer exists. With an independent set this cannot happen: every shortcut connects two vertices that survive the round.</p>
+
+  <p>To pick the set, SPoCH uses Vetter&rsquo;s local rule with the smallest possible neighborhood: <strong>contract every vertex whose score is lower than the scores of all its direct neighbors</strong>, breaking ties by vertex label. Two neighbors cannot both be lower than each other, so these local minima form an independent set for free. Each vertex decides by looking only at its own neighbors, so the selection is a <em>parallel loop</em>: a loop whose iterations run on different cores at the same time. (OSRM applies the same rule over two hops.)</p>
+
+  <figure class="demo" id="demo-rounds">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>One vertex per step, or an independent set per round</h3>
+      <p class="demo-hint">Press Play. In each step, the first build contracts one vertex and the second contracts every local minimum of the score. Pink marks what goes next.</p>
+    </div>
+    <div class="demo-split">
+      <div class="demo-stage"><span class="demo-pane-label">One at a time</span><canvas aria-label="Sequential contraction of a road-like network, one vertex per step"></canvas></div>
+      <div class="demo-stage"><span class="demo-pane-label">Independent set per round</span><canvas aria-label="Round-based contraction of the same network, many vertices per round"></canvas></div>
+    </div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--v-pink)"></span>contracted in the next step</span>
+      <span><span class="sw line" style="background: var(--v-orange)"></span>shortcut in the overlay graph</span>
+      <span><span class="sw" style="background: var(--v-gray)"></span>already in the hierarchy</span>
+    </div>
+    <figcaption>In the round-based build the pink vertices are never neighbors, which is what allows them to be contracted together. The first rounds remove a large share of the network; later rounds find fewer local minima, because the remaining vertices are tied together by shortcuts. A round is not a unit of time: its work is shared among all the cores, so the two step counters do not measure a speedup. Score ties are broken by a random priority per vertex.</figcaption>
+  </figure>
+
+  <p>The shape in the figure, a fast collapse followed by smaller rounds, is what we observe on real inputs too: usually more than 99% of the vertices are contracted within the first 10 to 20 rounds, and the small core that remains takes many more rounds but little time. These are measurements, not guarantees. On our chain-shaped test graphs, where almost all scores are equal and the tie-breaking decides, a constant fraction of the vertices is still selected in every round.</p>
+
+  <p>Inside a round, every step is a parallel loop over many vertices, and a scheduler spreads its iterations over all the cores. The rounds follow one another; the cores share the work within each round.</p>
+
+  <p>One detail matters for correctness. Imagine two equally long routes between a and b, one through v and one through v&prime; (v and v&prime; are not neighbors, so both can be selected in the same round). If each treated the other as its witness, neither would add a shortcut, and a and b would drift apart. This is why the rule from <a href="#contraction">section 2</a> adds a shortcut on a tie.</p>
+
+  <p>One round of SPoCH has four steps:</p>
+
+  <ol class="ch-steps">
+    <li><strong>LocalSearch.</strong> Run the witness searches that the <em>affected</em> vertices need, and store the distances in a shared table. A vertex is affected when a neighbor was contracted in the previous round; in round 1, every vertex is.</li>
+    <li><strong>Score.</strong> Recompute the score of each affected vertex by looking distances up in the table.</li>
+    <li><strong>Select.</strong> Take every vertex whose score is a local minimum.</li>
+    <li><strong>Contract.</strong> Move the selected vertices into the hierarchy and insert their shortcuts, again by table lookup.</li>
+  </ol>
+
+  <p>Score, Select and Contract follow Vetter&rsquo;s outline. LocalSearch is new, and it is what turns Score and Contract into lookups.</p>
+</section>
+
+<section id="localsearch" data-toc="LocalSearch">
+  <h2><span class="num">06</span>Idea 1: search once, look up afterwards</h2>
+
+  <p>In both parallel builders we compared with, the witness searches run inside scoring and inside contraction: each vertex being scored starts a Dijkstra from each of its neighbors, and each result is used once.</p>
+
+  <p>SPoCH moves all of these searches into a step of their own, <strong>LocalSearch</strong>, and organizes them differently.</p>
+
+  <ul>
+    <li><strong>Batching.</strong> Searches are grouped by their <span class="k k-blue">source</span> vertex. If three different vertices each need a distance from B, that becomes one Dijkstra from B with three targets, not three Dijkstras.</li>
+    <li><strong>Memoization.</strong> Every distance found is written to a shared hash table. A pair that is already in the table is not searched again, in this round or in later ones, until the table fills up and is emptied. This is sound because contraction never changes the distance between two surviving vertices.</li>
+    <li><strong>Pruning.</strong> If an edge in the overlay graph is heavier than the distance the table holds for its two ends, the edge is useless and is deleted.</li>
+  </ul>
+
+  <p>Note what the table stores: the plain shortest distance from a to b in the overlay graph, with nothing excluded. The test from <a href="#contraction">section 2</a> becomes &ldquo;is a&ndash;v&ndash;b exactly as long as that distance?&rdquo; It gives the same answer, ties included, but no longer mentions v, so one stored distance serves every vertex that asks about the pair.</p>
+
+  <p>The figure below replays round 2 of the ten-vertex example, right after round 1 contracted C, E and I. Round 1 scored every vertex, so the table already holds the distance between any two vertices that were two hops apart.</p>
+
+  <figure class="demo" id="demo-batch">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>How many Dijkstra runs does round 2 need?</h3>
+      <p class="demo-hint">Step through each of the three strategies and watch the tally at the bottom of the picture.</p>
+    </div>
+    <div class="demo-stage"><canvas class="tall" aria-label="Round two of the example: witness searches under three strategies, with a tally of Dijkstra runs"></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--v-blue)"></span>source of the current search</span>
+      <span><span class="sw" style="background: var(--v-green)"></span>target it must reach (dotted arc)</span>
+      <span><span class="sw" style="background: transparent; box-shadow: 0 0 0 2px var(--v-purple)"></span>affected: needs a new score</span>
+      <span><span class="sw" style="background: var(--v-red); box-shadow: inset 0 0 0 2px var(--v-red), inset 0 0 0 3.5px #fff"></span>repeated source (double ring)</span>
+    </div>
+    <figcaption>Rescoring the affected vertices independently takes 10 Dijkstra runs. Grouping the same searches by source leaves 7, and skipping the distances already in the table leaves 5 runs with 6 targets. Distances are stored per direction (A to D and D to A are separate entries) because real road graphs have one-way streets. The figure steps through the searches one by one so that they can be counted; in SPoCH the searches of a round run at the same time on different cores.</figcaption>
+  </figure>
+
+  <p>Fewer searches save total work. For parallelism, what changes is the unit of work: one size-capped Dijkstra per source, with all sources running in parallel, in place of all the searches of one vertex on a single thread. Suppose that late in the build three vertices with 500 neighbors each need new scores. One vertex per thread keeps three cores busy; batched by source, the same work is up to 1,500 separate searches that can be spread over every core. Score and Contract are then parallel loops over table lookups.</p>
+
+  <p>Like other builders, SPoCH caps the size of each search. If a search stops before reaching a target, the shortcut is added anyway: the hierarchy can end up slightly larger, never wrong, and pruning removes some of these extra shortcuts later.</p>
+</section>
+
+<section id="graph" data-toc="Graph storage">
+  <h2><span class="num">07</span>Idea 2: a graph that many threads can edit</h2>
+
+  <p>The overlay graph changes every round: selected vertices leave, shortcuts arrive. But the fastest way to store a graph for reading is a rigid one. In <strong>CSR</strong> (compressed sparse row) format, all neighbor lists are packed back to back in one big array. Scanning a vertex&rsquo;s neighbors is a single pass over contiguous memory, but you cannot insert an edge without shifting everything after it.</p>
+
+  <p>SPoCH keeps the CSR for reading and puts new shortcuts in a second structure built for writing: a <strong>hash table</strong> that many threads can insert into at once. Edges are directed, so each one is filed under its source vertex, and a two-way street appears once per direction.</p>
+
+  <div class="ch-mem wide" data-reveal>
+    <span class="ch-mem__title">Overlay graph in CSR form: rebuilt only occasionally</span>
+    <div class="ch-mem__row">
+      <span class="ch-group"><span class="ch-cell ch-cell--head">A:</span><span class="ch-cell">B 3</span><span class="ch-cell ch-cell--dead">E 2</span></span>
+      <span class="ch-group"><span class="ch-cell ch-cell--head">B:</span><span class="ch-cell">A 3</span><span class="ch-cell ch-cell--dead">C 2</span><span class="ch-cell">F 1</span></span>
+      <span class="ch-group"><span class="ch-cell ch-cell--head">D:</span><span class="ch-cell ch-cell--dead">C 4</span><span class="ch-cell">H 2</span></span>
+      <span class="ch-group"><span class="ch-cell ch-cell--head">F:</span><span class="ch-cell">B 1</span><span class="ch-cell ch-cell--dead">E 5</span><span class="ch-cell">G 2</span><span class="ch-cell ch-cell--dead">I 4</span></span>
+      <span class="ch-group"><span class="ch-cell ch-cell--head">&hellip;</span></span>
+    </div>
+    <span class="ch-mem__title">Shortcut hash table: concurrent inserts, keyed by the edge&rsquo;s source vertex</span>
+    <div class="ch-mem__row">
+      <span class="ch-group"><span class="ch-cell ch-cell--empty">&middot;</span><span class="ch-cell ch-cell--empty">&middot;</span><span class="ch-cell ch-cell--new">B &rarr; D 6</span><span class="ch-cell ch-cell--empty">&middot;</span></span>
+      <span class="ch-group"><span class="ch-cell ch-cell--empty">&middot;</span><span class="ch-cell ch-cell--new">D &rarr; B 6</span><span class="ch-cell ch-cell--empty">&middot;</span><span class="ch-cell ch-cell--empty">&middot;</span></span>
+    </div>
+    <p>The ten-vertex example after round 1. Crossed-out entries point to contracted vertices and are skipped. The neighbors of B are its CSR segment (A, F) plus whatever the table holds under key B (the new shortcut to D).</p>
+  </div>
+
+  <p>The table is <em>phase-concurrent</em>: it is safe as long as all threads are doing the same kind of operation, here inserting. A thread hashes the source vertex to a slot and claims it with a <strong>compare-and-swap</strong>, an atomic instruction (it cannot be interrupted halfway) that writes only if the slot is still empty. If another thread got there first, it tries the next slot. No thread waits for a lock.</p>
+
+  <p>Two contracted vertices can even produce the <em>same</em> shortcut with different weights. Then the entry is updated with an atomic &ldquo;write the minimum,&rdquo; so the lighter edge wins whichever thread arrives first.</p>
+
+  <p>Whenever the algorithm needs a vertex&rsquo;s neighbors, it reads the CSR segment and then probes the table. The table is merged into a fresh CSR only when a constant fraction of its slots is full, because late rounds add only a few edges each. Compared with rebuilding the array every round, merging lazily reduces the share of the Contract step from 39.9% to 19.8% of the total running time, on average over our test graphs.</p>
+
+  <p>This is also why SPoCH can use the one-hop rule from <a href="#rounds">section 5</a>. OSRM&rsquo;s two-hop rule means that two vertices contracted in the same round never share a neighbor, so it needs no concurrent structure for inserting shortcuts; the price is smaller sets and, in our measurements, up to 4&times; more rounds than SPoCH. With safe concurrent inserts, SPoCH can contract vertices that share a neighbor in the same round.</p>
+</section>
+
+<section id="results" data-toc="Results">
+  <h2><span class="num">08</span>What we measured</h2>
+
+  <p>All experiments ran on one machine with 96 cores (192 hyperthreads) and 1.5 TB of memory. We tested 16 graphs: six OpenStreetMap road networks with 3 to 131 million vertices, four synthetic graphs, and six <em>k</em>-nearest-neighbor graphs (each point of a data set linked to its <em>k</em> closest points). We compare with the two parallel builders from <a href="#building">section 4</a>, OSRM (by Luxen and Vetter) and CH-Constructor, and with two sequential ones, RoutingKit and the PHAST builder.</p>
+
+  <div class="stats" data-reveal>
+    <div class="stat"><span class="stat-num">3.8&ndash;41&times;</span><span class="stat-label">faster build than the fastest other builder on each of the 16 graphs (geometric mean 8.85&times;), using 96 cores / 192 hyperthreads</span></div>
+    <div class="stat"><span class="stat-num">28&ndash;71&times;</span><span class="stat-label">self-speedup across the 16 graphs: SPoCH on 192 hyperthreads vs. SPoCH on one thread</span></div>
+    <div class="stat"><span class="stat-num">1.31&times;</span><span class="stat-label">average query time on SPoCH&rsquo;s hierarchy relative to RoutingKit&rsquo;s, with the same query code</span></div>
+  </div>
+
+  <figure class="demo" id="demo-results">
+    <div class="demo-head">
+      <span class="demo-tag">Explore</span>
+      <h3>The numbers from the paper, per road network</h3>
+      <p class="demo-hint">Pick a chart and a road network. CA is the smallest (3.34 million vertices), EU the largest (131 million).</p>
+    </div>
+    <div class="demo-stage"><canvas aria-label="Chart of build time, query time or scaling for the selected road network"></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <figcaption>Build and query times are from the paper&rsquo;s main comparison table. SPoCH&rsquo;s parallel build uses all 192 hyperthreads of the 96 cores; CH-Constructor is shown at 8 threads, its best setting. The scaling curves come from the data behind the paper&rsquo;s scalability figure, a separate set of runs, so they differ from the table&rsquo;s ratios by a few percent.</figcaption>
+  </figure>
+
+  <div class="table-scroll nowrap" data-reveal>
+    <table>
+      <thead>
+        <tr>
+          <th>Build time (s)</th>
+          <th class="num"><abbr title="Central America">CA</abbr><small>3.34M</small></th>
+          <th class="num"><abbr title="Australia-Oceania">AO</abbr><small>6.22M</small></th>
+          <th class="num"><abbr title="Africa">AF</abbr><small>33.5M</small></th>
+          <th class="num"><abbr title="North America">NA</abbr><small>87.0M</small></th>
+          <th class="num"><abbr title="Asia">AS</abbr><small>95.7M</small></th>
+          <th class="num"><abbr title="Europe">EU</abbr><small>131M</small></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="ours"><td>SPoCH (192 hyperthreads)</td><td class="num">1.00</td><td class="num">2.25</td><td class="num">7.32</td><td class="num">23.1</td><td class="num">23.5</td><td class="num">32.9</td></tr>
+        <tr><td>OSRM (parallel)</td><td class="num">4.60</td><td class="num">26.8</td><td class="num">60.0</td><td class="num">307</td><td class="num">286</td><td class="num">521</td></tr>
+        <tr><td>CH-Constructor (8 threads)</td><td class="num">19.0</td><td class="num">32.9</td><td class="num">334</td><td class="num">1527</td><td class="num">1548</td><td class="num">2121</td></tr>
+        <tr><td>PHAST (sequential)</td><td class="num">15.5</td><td class="num">66.2</td><td class="num">287</td><td class="num">1341</td><td class="num">1421</td><td class="num">1865</td></tr>
+        <tr><td>RoutingKit (sequential)</td><td class="num">22.1</td><td class="num">94.7</td><td class="num">466</td><td class="num">2466</td><td class="num">2619</td><td class="num">3783</td></tr>
+        <tr><td>SPoCH (1 thread)</td><td class="num">29.3</td><td class="num">89.6</td><td class="num">383</td><td class="num">1411</td><td class="num">1347</td><td class="num">1823</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="ch-key">Road networks: Central America (CA), Australia-Oceania (AO), Africa (AF), North America (NA), Asia (AS), Europe (EU). All times in seconds on the same 96-core machine.</p>
+
+  <p><strong>An order of magnitude on the large networks.</strong> On the four largest road networks SPoCH finishes in 7 to 33 seconds, where the other builders need between one minute and about an hour on the same machine.</p>
+
+  <p><strong>The gain comes from scaling.</strong> The last row of the table is SPoCH on a single thread. There it is competitive with the sequential builders: behind them on the smallest network, ahead of both on Asia and Europe. With all 192 hyperthreads it runs 28 to 71&times; faster than on one thread, depending on the graph.</p>
+
+  <p><strong>Queries stay close to the best sequential hierarchy.</strong> A round-based build contracts many vertices earlier than a sequential build would, so it produces a different hierarchy. To compare hierarchies and not query engines, we took the hierarchy from each builder and ran RoutingKit&rsquo;s query code on all of them. A query on SPoCH&rsquo;s hierarchy takes 1.31&times; as long as on RoutingKit&rsquo;s on average (1.17 to 1.79&times; per graph), and queries on the hierarchies from PHAST, OSRM and CH-Constructor take 1.25&times;, 1.35&times; and 2.07&times; as long as on SPoCH&rsquo;s.</p>
+
+  <p><strong>Scope.</strong> CH is designed for sparse, road-like graphs, and that is the setting we measured. SPoCH parallelizes the construction; each query runs on one thread, as in any CH.</p>
+</section>
+
+<section id="recap" data-toc="Recap">
+  <h2><span class="num">09</span>Recap</h2>
+
+  <p>A contraction hierarchy (Geisberger et al., 2008) removes vertices one by one and adds shortcuts so that distances never change; queries then only search upward and finish in microseconds. Building one is dominated by the many small witness searches behind every vertex&rsquo;s score. Vetter showed in 2009 that an independent set of vertices can be contracted in each round.</p>
+
+  <p>SPoCH makes those rounds scale with two changes. <strong>LocalSearch</strong> runs each round&rsquo;s witness searches once, batched by source and remembered in a shared table, so that the unit of parallel work is one small search and scoring and contraction become loops of lookups. And the changing graph lives in a compact array plus a <strong>hash table with lock-free inserts</strong>, merged only occasionally, so threads never wait for each other when they add shortcuts.</p>
+
+  <p>On 96 cores (192 hyperthreads) this builds the hierarchy of North America in 23.1 seconds, where the fastest other builder we tested takes 307 seconds, and it is 3.8 to 41&times; faster than the fastest other builder on each of our 16 graphs, while queries stay close to those on the best sequential hierarchy.</p>
+
+  <p>The paper, <a href="https://arxiv.org/abs/2412.18008">&ldquo;Parallel Contraction Hierarchies Can Be Efficient and Scalable&rdquo;</a> (ICS 2025), has the full algorithms, the data-structure details and the results on all 16 graphs. The <a href="https://github.com/ucrparlay/Parallel-Contraction-Hierarchy">code</a> is public.</p>
+</section>

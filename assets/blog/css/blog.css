@@ -1,0 +1,1026 @@
+/* ==========================================================================
+   Blog: interactive research posts
+   Everything is scoped under .blog so it never leaks into the rest of the site.
+   Colors are tokens; the dark set follows the site's html[data-theme="dark"].
+   ========================================================================== */
+
+.blog,
+.blog-progress {
+  --b-bg: var(--global-bg-color, #fff);
+  --b-ink: #20242c;
+  --b-text: #3a404b;
+  --b-muted: #667085;
+  --b-faint: #6b7483;
+  --b-line: #e4e7ec;
+  --b-line-strong: #cfd4dc;
+  --b-panel: #f6f7f9;
+  --b-stage: #ffffff;
+  --b-accent: var(--post-accent, #2f7f93);
+  --b-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.06);
+
+  /* visualization palette (read by Blog.theme() in common.js) */
+  --v-blue: #3b82f6;
+  --v-orange: #f0862a;
+  --v-green: #2fa56a;
+  --v-red: #e5484d;
+  --v-purple: #8b5cf6;
+  --v-yellow: #dca908;
+  --v-teal: #12a3a8;
+  --v-pink: #e0559b;
+  --v-gray: #9aa3af;
+
+  /* the same hues, dark enough for small text on a light background (>= 4.5:1).
+     --v-* is for fills and strokes, --t-* is for words. */
+  --t-blue: #1d4ed8;
+  --t-orange: #c2410c;
+  --t-green: #15803d;
+  --t-red: #b91c1c;
+  --t-purple: #6d28d9;
+  --t-yellow: #a16207;
+  --t-teal: #0f766e;
+  --t-pink: #be185d;
+  --t-gray: #4b5563;
+}
+
+html[data-theme="dark"] .blog,
+html[data-theme="dark"] .blog-progress {
+  --b-ink: #ffffff;
+  --b-text: #e6e8ec;
+  --b-muted: #c2c7d0;
+  --b-faint: #9aa0aa;
+  --b-line: #5d6066;
+  --b-line-strong: #72767d;
+  --b-panel: #3c3c3e;
+  --b-stage: #323234;
+  --b-accent: var(--post-accent-dark, var(--post-accent, #52adc8));
+  --b-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.2);
+
+  --v-blue: #73abff;
+  --v-orange: #ffa95c;
+  --v-green: #5fd39a;
+  --v-red: #ff7d81;
+  --v-purple: #b9a0ff;
+  --v-yellow: #ffd451;
+  --v-teal: #55d3d6;
+  --v-pink: #ff8cc3;
+  --v-gray: #8e949d;
+
+  /* the site's dark background is a mid gray, so words need lighter hues than fills */
+  --t-blue: #a9cdff;
+  --t-orange: #ffc089;
+  --t-green: #86e3b6;
+  --t-red: #ffa6a9;
+  --t-purple: #cfbfff;
+  --t-yellow: #ffe07d;
+  --t-teal: #86e2e4;
+  --t-pink: #ffb0d5;
+  --t-gray: #c4c9d1;
+}
+
+html[data-theme="dark"] .blog .callout-label,
+html[data-theme="dark"] .blog-body h2 .num,
+html[data-theme="dark"] .blog .demo-tag {
+  color: color-mix(in srgb, var(--b-accent) 72%, #fff);
+}
+
+/* ---------- reading progress ---------- */
+
+.blog-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.blog-progress > span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  background: var(--b-accent, #2f7f93);
+  transition: none;
+}
+
+/* ---------- page frame ---------- */
+
+.blog {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 1.5rem 20px 3rem;
+  color: var(--b-text);
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+/* the site sets `transition: all` on most inline elements; it makes theme
+   switches and canvas-adjacent labels shimmer, so turn it off in here */
+.blog p, .blog span, .blog b, .blog i, .blog strong, .blog em,
+.blog h1, .blog h2, .blog figure, .blog img, .blog header, .blog input,
+.blog tr, .blog td {
+  transition: none;
+}
+
+.blog a {
+  color: var(--b-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--b-accent) 35%, transparent);
+  text-underline-offset: 0.18em;
+  transition: text-decoration-color 0.15s ease;
+}
+
+.blog a:hover { text-decoration-color: var(--b-accent); }
+.blog a:visited { color: var(--b-accent); }
+
+/* ---------- hero ---------- */
+
+.blog-hero {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1.25rem 0 2rem;
+}
+
+.blog a.blog-back {
+  display: inline-block;
+  margin: -0.35rem 0 1.05rem -0.5rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--b-muted);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.blog a.blog-back:hover { color: var(--b-accent); }
+
+.blog-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.9rem;
+}
+
+.blog-chip {
+  display: inline-block;
+  padding: 0.12rem 0.6rem;
+  border: 1px solid var(--b-line-strong);
+  border-radius: 999px;
+  color: var(--b-muted);
+  font-size: max(11px, 0.68rem);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.blog-chip--accent {
+  border-color: var(--b-accent);
+  background: var(--b-accent);
+  color: #fff;
+}
+
+html[data-theme="dark"] .blog-chip--accent { color: #1d1d1f; }
+
+.blog .blog-title {
+  margin: 0 0 1rem;
+  color: var(--b-ink);
+  font-size: clamp(1.9rem, 4.6vw, 3rem);
+  font-weight: 800;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.blog-lead {
+  margin: 0 0 1.2rem;
+  color: var(--b-text);
+  font-size: clamp(1.05rem, 1.9vw, 1.25rem);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.blog-authors {
+  margin: 0 0 1rem;
+  color: var(--b-muted);
+  font-size: 0.82rem;
+}
+
+.blog-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.blog a.blog-link {
+  display: inline-block;
+  padding: 0.32rem 0.8rem;
+  border: 1px solid var(--b-line-strong);
+  border-radius: 8px;
+  color: var(--b-ink);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.blog a.blog-link:hover {
+  border-color: var(--b-accent);
+  color: var(--b-accent);
+  transform: translateY(-1px);
+}
+
+/* ---------- body / prose ---------- */
+
+.blog-body > *,
+.blog-body > section > * {
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.blog-body > section {
+  max-width: none;
+  margin-top: 3.2rem;
+  scroll-margin-top: 90px;
+}
+
+.blog-body > .wide,
+.blog-body > section > .wide,
+.blog-body > .demo,
+.blog-body > section > .demo {
+  max-width: 1000px;
+}
+
+.blog-body h2 {
+  margin-top: 0;
+  margin-bottom: 0.9rem;
+  padding: 0;
+  border: 0;
+  color: var(--b-ink);
+  font-size: clamp(1.35rem, 2.6vw, 1.7rem);
+  font-weight: 750;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+
+.blog-body h2 .num {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--b-accent);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.blog-body h3 {
+  margin-top: 2rem;
+  margin-bottom: 0.6rem;
+  color: var(--b-ink);
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.blog-body p {
+  margin-top: 0;
+  margin-bottom: 1.1rem;
+  text-wrap: pretty;
+}
+
+.blog-body ul,
+.blog-body ol {
+  margin-top: 0;
+  margin-bottom: 1.1rem;
+  padding-left: 1.3rem;
+}
+
+.blog-body li { margin-bottom: 0.4rem; }
+.blog-body strong { color: var(--b-ink); }
+
+.blog-body code {
+  padding: 0.08em 0.35em;
+  border: 1px solid var(--b-line);
+  border-radius: 4px;
+  background: var(--b-panel);
+  box-shadow: none;
+  color: var(--b-ink);
+  font-size: 0.86em;
+}
+
+.blog-body pre {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--b-line);
+  border-radius: 10px;
+  background: var(--b-panel);
+  color: var(--b-ink);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+
+.blog-body pre code { padding: 0; border: 0; background: none; font-size: inherit; }
+
+/* MathJax keeps a hidden MathML copy of every formula for screen readers. It is
+   absolutely positioned with `width: auto`, so next to the right edge of a phone
+   screen it sticks out and makes the whole page scroll sideways. Pin it to 1px. */
+.blog mjx-container mjx-assistive-mml {
+  width: 1px !important;
+  height: 1px !important;
+  white-space: nowrap;
+}
+
+/* display math: wrap $$...$$ in <p class="eq"> so it centers in the text column
+   and scrolls sideways on phones instead of overflowing */
+.blog-body p.eq {
+  margin-top: 1.2rem;
+  margin-bottom: 1.3rem;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* a short, emphasized takeaway */
+.blog-body .callout {
+  margin-top: 1.4rem;
+  margin-bottom: 1.4rem;
+  padding: 0.9rem 1.1rem;
+  border-left: 3px solid var(--b-accent);
+  border-radius: 0 10px 10px 0;
+  background: color-mix(in srgb, var(--b-accent) 8%, transparent);
+  color: var(--b-ink);
+}
+
+.blog-body .callout > :last-child { margin-bottom: 0; }
+
+.blog-body .callout .callout-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--b-accent);
+  font-size: max(11px, 0.68rem);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* colored inline keyword that matches a color used in a demo */
+.blog .k { font-weight: 650; white-space: nowrap; }
+.blog .k-blue { color: var(--t-blue); }
+.blog .k-orange { color: var(--t-orange); }
+.blog .k-green { color: var(--t-green); }
+.blog .k-red { color: var(--t-red); }
+.blog .k-purple { color: var(--t-purple); }
+.blog .k-yellow { color: var(--t-yellow); }
+.blog .k-teal { color: var(--t-teal); }
+.blog .k-pink { color: var(--t-pink); }
+.blog .k-accent { color: var(--b-accent); }
+
+/* ---------- stat row ---------- */
+
+.blog .stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1.6rem;
+  margin-bottom: 1.6rem;
+}
+
+.blog .stat {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--b-line);
+  border-radius: 12px;
+  background: var(--b-panel);
+}
+
+.blog .stat-num {
+  display: block;
+  color: var(--b-accent);
+  font-size: 1.7rem;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.blog .stat-num sup { font-size: 0.6em; }
+
+.blog .stat-label {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--b-muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+/* ---------- tables ---------- */
+
+.blog-body table {
+  display: table;
+  width: 100%;
+  margin-bottom: 1.4rem;
+  border: 0;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.blog-body thead { background: none; border-bottom: 2px solid var(--b-line-strong); }
+
+.blog-body th {
+  padding: 0.5rem 0.6rem;
+  border: 0;
+  color: var(--b-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.blog-body td {
+  padding: 0.5rem 0.6rem;
+  border: 0;
+  border-bottom: 1px solid var(--b-line);
+  color: var(--b-text);
+}
+
+.blog-body td.num, .blog-body th.num { text-align: right; }
+.blog-body tr.ours td { color: var(--b-ink); font-weight: 650; }
+.blog-body tr.ours td:first-child { box-shadow: inset 3px 0 0 var(--b-accent); }
+
+.blog .table-scroll { overflow-x: auto; }
+.blog .table-scroll.nowrap th, .blog .table-scroll.nowrap td { white-space: nowrap; }
+
+/* ---------- demo (interactive figure) ---------- */
+
+/* Every figure reads top to bottom as: title, stage, controls, status,
+   readout, legend, caption, whatever order the markup uses. Controls sit
+   directly under the stage so they never move when the status text reflows. */
+.blog figure.demo {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;            /* the theme's own `figure` rule wraps and top-aligns */
+  align-items: stretch;
+  justify-content: flex-start;
+  margin-top: 2rem;
+  margin-bottom: 2rem;
+  border: 1px solid var(--b-line);
+  border-radius: 16px;
+  background: var(--b-panel);
+  box-shadow: var(--b-shadow);
+  overflow: hidden;
+}
+
+.blog figure.demo > * { order: 5; min-width: 0; }
+.blog figure.demo > .demo-head { order: 1; }
+.blog figure.demo > .demo-stage, .blog figure.demo > .demo-split { order: 2; }
+.blog figure.demo > .demo-controls { order: 3; }
+.blog figure.demo > .demo-status { order: 4; }
+.blog figure.demo > .demo-readout { order: 6; }
+.blog figure.demo > .demo-legend { order: 7; }
+.blog figure.demo > figcaption { order: 9; }
+
+/* shown only if the figure's script never ran or threw */
+.blog figure.demo:not(.is-ready) .demo-stage::after {
+  content: "This interactive figure needs JavaScript.";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  color: var(--b-muted);
+  font-size: 0.8rem;
+  text-align: center;
+  opacity: 0;
+  animation: blog-fallback 0.01s 2.5s forwards;
+}
+
+.blog figure.demo.is-failed .demo-stage::after { content: "This figure failed to load. Reloading the page may help."; }
+.blog figure.demo .demo-split > .demo-stage:not(:first-child)::after { content: none; }
+
+@keyframes blog-fallback { to { opacity: 1; } }
+
+.blog .demo-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 0.7rem;
+  padding: 0.85rem 1.1rem 0.7rem;
+}
+
+.blog .demo-tag {
+  flex: none;
+  color: var(--b-accent);
+  font-size: max(11px, 0.64rem);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.blog .demo-head h3,
+.blog .demo-title {
+  margin: 0;
+  color: var(--b-ink);
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.blog .demo-hint {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--b-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.blog .demo-stage {
+  position: relative;
+  border-top: 1px solid var(--b-line);
+  border-bottom: 1px solid var(--b-line);
+  background: var(--b-stage);
+}
+
+.blog .demo-stage canvas {
+  display: block;
+  width: 100%;
+  height: 360px;
+  touch-action: pan-y;
+}
+
+.blog .demo-stage canvas.tall { height: 460px; }
+.blog .demo-stage canvas.short { height: 240px; }
+.blog .demo-stage canvas.draggable { cursor: grab; touch-action: none; }
+.blog .demo-stage canvas.clickable { cursor: pointer; }
+
+.blog .demo-stage svg { display: block; width: 100%; height: auto; }
+
+/* two stages side by side (stack on phones) */
+.blog .demo-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--b-line);
+  border-top: 1px solid var(--b-line);
+  border-bottom: 1px solid var(--b-line);
+}
+
+.blog .demo-split > .demo-stage { border: 0; min-width: 0; }
+
+.blog .demo-pane-label {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  z-index: 1;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--b-stage) 80%, transparent);
+  color: var(--b-muted);
+  font-size: max(11px, 0.66rem);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.blog .demo-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  padding: 0.7rem 1.1rem 0;
+}
+
+.blog .demo-controls:empty { display: none; }
+
+.blog .demo-controls .spacer { flex: 1 1 auto; }
+
+.blog .demo-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.1rem;
+  padding: 0.5rem 1.1rem 0;
+  color: var(--b-muted);
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.blog .demo-readout b { color: var(--b-ink); font-weight: 700; }
+
+.blog .demo-status {
+  min-height: 2.6em;
+  margin: 0;
+  padding: 0.65rem 1.1rem 0;
+  color: var(--b-text);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.blog .demo-status b { color: var(--b-ink); }
+
+.blog figure.demo figcaption {
+  margin: 0.8rem 0 0;
+  padding: 0.7rem 1.1rem 0.9rem;
+  border-top: 1px solid var(--b-line);
+  color: var(--b-muted);
+  font-family: inherit;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.blog .demo-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
+  padding: 0.55rem 1.1rem 0;
+  color: var(--b-muted);
+  font-size: 0.74rem;
+}
+
+.blog .demo-legend .sw {
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-right: 0.35em;
+  border-radius: 50%;
+  vertical-align: baseline;
+}
+
+.blog .demo-legend .sw.line { width: 1.1em; height: 0.22em; border-radius: 2px; vertical-align: middle; }
+.blog .demo-legend .sw.sq { border-radius: 2px; }
+
+/* ---------- controls ---------- */
+
+.blog .b-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35em;
+  min-height: 34px;
+  margin: 0;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--b-line-strong);
+  border-radius: 8px;
+  background: var(--b-stage);
+  color: var(--b-ink);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  user-select: none;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: border-color 0.12s ease, background-color 0.12s ease, transform 0.08s ease;
+}
+
+.blog .b-btn:hover { border-color: var(--b-accent); }
+.blog .b-btn:active { transform: translateY(1px); }
+.blog .b-btn:focus-visible { outline: 2px solid var(--b-accent); outline-offset: 2px; }
+.blog .b-btn[disabled] { opacity: 0.45; cursor: not-allowed; border-color: var(--b-line-strong); }
+
+.blog .b-btn.primary {
+  border-color: var(--b-accent);
+  background: var(--b-accent);
+  color: #fff;
+}
+
+html[data-theme="dark"] .blog .b-btn.primary { color: #1d1d1f; }
+.blog .b-btn.primary:hover { filter: brightness(1.06); }
+.blog .b-btn.icon { min-width: 34px; padding-left: 0.5rem; padding-right: 0.5rem; }
+
+.blog .b-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  padding: 2px;
+  border: 1px solid var(--b-line-strong);
+  border-radius: 9px;
+  background: var(--b-stage);
+}
+
+.blog .b-seg button {
+  min-height: 28px;
+  margin: 0;
+  padding: 0.2rem 0.7rem;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--b-muted);
+  font-family: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.blog .b-seg button:hover { color: var(--b-ink); }
+.blog .b-seg button:focus-visible { outline: 2px solid var(--b-accent); outline-offset: 1px; }
+
+.blog .b-seg button[aria-pressed="true"] {
+  background: var(--b-accent);
+  color: #fff;
+}
+
+html[data-theme="dark"] .blog .b-seg button[aria-pressed="true"] { color: #1d1d1f; }
+
+.blog .b-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--b-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: default;
+}
+
+/* label, then its current value, then the slider: "Cores P  96  [----o--]" */
+.blog .b-field output {
+  min-width: 2em;
+  color: var(--b-ink);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+.blog input[type="range"].b-range {
+  width: 130px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  accent-color: var(--b-accent);
+  cursor: pointer;
+}
+
+.blog input[type="range"].b-range:focus-visible {
+  outline: 2px solid var(--b-accent);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.blog label.b-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--b-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.blog label.b-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--b-accent);
+}
+
+.blog label.b-check input:focus-visible {
+  outline: 2px solid var(--b-accent);
+  outline-offset: 2px;
+}
+
+/* keyboard focus on a canvas (see Blog.keys) and on a scrolling table */
+.blog .demo-stage canvas:focus { outline: none; }
+.blog .demo-stage canvas:focus-visible { outline: 2px solid var(--b-accent); outline-offset: -2px; }
+.blog .table-scroll:focus-visible { outline: 2px solid var(--b-accent); outline-offset: 2px; }
+
+/* visually hidden, still read by screen readers */
+.blog .b-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- table of contents ----------
+   A row of chips under the hero; on very wide screens it becomes a fixed
+   rail in the left margin with the current section highlighted. */
+
+.blog-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.4rem;
+  max-width: 720px;
+  margin: 0 auto;
+  font-size: max(12px, 0.72rem);
+  line-height: 1.35;
+}
+
+.blog-toc:empty { display: none; }
+
+.blog .blog-toc a {
+  padding: 0.22rem 0.65rem;
+  border: 1px solid var(--b-line);
+  border-radius: 999px;
+  color: var(--b-muted);
+  text-decoration: none;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.blog .blog-toc a:hover { border-color: var(--b-accent); color: var(--b-ink); }
+
+@media (min-width: 1500px) {
+  .blog-toc {
+    display: block;
+    position: fixed;
+    top: 130px;
+    left: max(16px, calc(50vw - 740px));
+    width: 190px;
+    max-height: calc(100vh - 170px);
+    margin: 0;
+    overflow-y: auto;
+  }
+
+  .blog .blog-toc a {
+    display: block;
+    padding: 0.28rem 0 0.28rem 0.8rem;
+    border: 0;
+    border-left: 2px solid var(--b-line);
+    border-radius: 0;
+    color: var(--b-muted);
+  }
+
+  .blog .blog-toc a:hover { color: var(--b-ink); }
+
+  .blog .blog-toc a.active {
+    border-left-color: var(--b-accent);
+    color: var(--b-ink);
+    font-weight: 650;
+  }
+}
+
+/* ---------- pager ---------- */
+
+.blog-pager {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+  max-width: 1000px;
+  margin: 4rem auto 0;
+  padding-top: 2rem;
+  border-top: 1px solid var(--b-line);
+}
+
+.blog a.blog-pager__item {
+  --b-accent: var(--post-accent);
+  display: block;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--b-line);
+  border-radius: 12px;
+  background: var(--b-panel);
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+html[data-theme="dark"] .blog a.blog-pager__item { --b-accent: var(--post-accent-dark, var(--post-accent)); }
+
+.blog a.blog-pager__item:hover { border-color: var(--b-accent); transform: translateY(-2px); }
+
+.blog-pager__kicker {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--b-accent);
+  font-size: max(11px, 0.64rem);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.blog-pager__title {
+  display: block;
+  color: var(--b-ink);
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* ---------- scroll reveal ---------- */
+
+.blog.js-reveal [data-reveal] {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.6s ease, transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.blog.js-reveal [data-reveal].is-in {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---------- index page ---------- */
+
+.blog-index { padding-bottom: 0.5rem; }
+.blog-index .blog-hero { max-width: 1000px; padding-bottom: 1.2rem; }
+
+.blog-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.1rem;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.blog a.blog-card {
+  --b-accent: var(--post-accent);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--b-line);
+  border-radius: 16px;
+  background: var(--b-panel);
+  color: inherit;
+  text-decoration: none;
+  overflow: hidden;
+  box-shadow: var(--b-shadow);
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+html[data-theme="dark"] .blog a.blog-card { --b-accent: var(--post-accent-dark, var(--post-accent)); }
+
+.blog a.blog-card:hover,
+.blog a.blog-card:focus-visible {
+  border-color: var(--b-accent);
+  transform: translateY(-3px);
+}
+
+.blog-card__art {
+  position: relative;
+  border-bottom: 1px solid var(--b-line);
+  background: var(--b-stage);
+}
+
+.blog-card__art canvas { display: block; width: 100%; height: 200px; }
+
+.blog-card__body { display: flex; flex: 1; flex-direction: column; padding: 1rem 1.1rem 1.1rem; }
+
+.blog-card__kicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.6rem;
+}
+
+.blog .blog-card__title {
+  margin: 0 0 0.45rem;
+  color: var(--b-ink);
+  font-size: 1.15rem;
+  font-weight: 750;
+  line-height: 1.22;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.blog-card__summary {
+  flex: 1;
+  margin: 0 0 0.8rem;
+  color: var(--b-text);
+  font-size: max(14px, 0.82rem);
+  line-height: 1.5;
+}
+
+.blog-card__more {
+  color: var(--b-accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.blog-card__more span { display: inline-block; transition: transform 0.18s ease; }
+.blog a.blog-card:hover .blog-card__more span { transform: translateX(4px); }
+
+/* ---------- small screens ---------- */
+
+@media (max-width: 760px) {
+  .blog { padding-left: 16px; padding-right: 16px; }
+  .blog-cards { grid-template-columns: 1fr; }
+  .blog .demo-split { grid-template-columns: 1fr; }
+  .blog .demo-stage canvas { height: 300px; }
+  .blog .demo-stage canvas.tall { height: 380px; }
+  .blog .demo-stage canvas.short { height: 210px; }
+  .blog .demo-head, .blog .demo-controls { padding-left: 0.85rem; padding-right: 0.85rem; }
+  .blog .demo-status, .blog .demo-legend, .blog .demo-readout,
+  .blog figure.demo figcaption { padding-left: 0.85rem; padding-right: 0.85rem; }
+  .blog .demo-controls { gap: 0.5rem 0.7rem; }
+  .blog input[type="range"].b-range { width: 110px; }
+  .blog-body > section { margin-top: 2.5rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blog.js-reveal [data-reveal] { opacity: 1; transform: none; transition: none; }
+  .blog a.blog-card, .blog a.blog-pager__item, .blog a.blog-link, .blog .b-btn { transition: none; }
+}

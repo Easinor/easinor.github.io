@@ -1,0 +1,347 @@
+---
+title: "Parallel LIS: Peeling a Sequence One Layer at a Time"
+short_title: "Parallel LIS"
+slug_id: lis
+order: 1
+date: 2023-06-17
+venue: "SPAA 2023"
+topics: ["Parallel algorithms", "Dynamic programming"]
+lead: "Longest increasing subsequence is a textbook dynamic program that looks hopelessly sequential. Here is a short algorithm that runs it on many cores with the same total work as the sequential loop, up to a constant factor."
+summary: "A textbook dynamic program that looks hopelessly sequential, parallelized by peeling the input in rounds with a tournament tree. Step through the rounds yourself."
+excerpt: "An interactive explainer of our SPAA 2023 paper on parallel longest increasing subsequence and parallel van Emde Boas trees."
+authors: "Yan Gu, Ziyang Men, Zheqi Shen, Yihan Sun, Zijin Wan (alphabetical order)"
+accent: "#6a48f2"
+accent_dark: "#b9a0ff"
+links:
+  - label: "Paper (ACM DL)"
+    url: "https://dl.acm.org/doi/10.1145/3558481.3591069"
+  - label: "Code"
+    url: "https://github.com/ucrparlay/Parallel-LIS"
+script: lis.js
+---
+
+<style>
+  .blog-post[data-post="lis"] .demo-legend .chip { display: inline-block; min-width: 1.3em; margin-right: 0.35em; padding: 0 0.3em; border-radius: 999px; background: var(--b-muted); color: var(--b-stage); font-size: 0.9em; font-weight: 700; text-align: center; }
+  .blog-post[data-post="lis"] .demo-legend .sw.go { background: color-mix(in srgb, var(--b-accent) 30%, var(--b-stage)); border: 1.5px solid var(--b-accent); }
+  @media (max-width: 760px) {
+    .blog-post[data-post="lis"] #demo-wlis .demo-stage canvas { height: 250px; }
+  }
+</style>
+
+<section id="problem" data-toc="The problem">
+  <h2><span class="num">01</span>The problem, and the loop that solves it</h2>
+
+  <p>Take the sequence <code>52 31 45 26 61 10 39 44 58 20 70 35</code>. Cross out as few numbers as you can so that what remains goes strictly up. One answer is <code>10 39 44 58 70</code>: five numbers survive, and no choice keeps six. That is the <strong>longest increasing subsequence</strong> (LIS) problem: given \(n\) values \(A_1, \dots, A_n\), find the longest subsequence (in order, not necessarily adjacent) that is strictly increasing. Throughout this post \(n\) is the input size and \(k\) is the length of the answer.</p>
+
+  <p>Every algorithms course solves it with dynamic programming. Let \(\mathit{dp}[i]\) be the length of the longest increasing subsequence that <em>ends</em> at \(A_i\). An element can extend any subsequence that ends at an earlier, smaller element, so</p>
+
+  <p class="eq">$$\mathit{dp}[i] \;=\; 1 + \max\Bigl(0,\; \max_{j &lt; i,\; A_j &lt; A_i} \mathit{dp}[j]\Bigr),$$</p>
+
+  <p>where the 0 covers an element with nothing smaller before it. The answer is the largest \(\mathit{dp}\) value. The figure below computes it live; the number inside each point is its \(\mathit{dp}\) value.</p>
+
+  <figure class="demo" id="demo-dp">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Who waits for whom</h3>
+      <p class="demo-hint">Hover or tap a point to see what it depends on, and drag it up or down to change its value. Keyboard: arrow keys pick a point, + and &minus; change it.</p>
+    </div>
+    <div class="demo-stage"><canvas aria-label="Scatter plot of the sequence, position on the horizontal axis and value on the vertical axis, with the dp value written inside each point. Arrow keys select a point; plus and minus change its value."></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--b-accent)"></span>on one longest increasing subsequence</span>
+      <span><span class="sw sq" style="background: var(--v-blue); opacity: 0.35"></span>earlier and smaller: what the selected point depends on</span>
+      <span><span class="sw line" style="background: var(--v-blue)"></span>the predecessor that gives the best dp</span>
+    </div>
+    <figcaption>Position runs left to right, value runs bottom to top. A point depends on exactly the points below it and to its left. After <em>Sort ascending</em>, every point depends on every earlier one (66 pairs) and \(k = n\). After <em>Sort descending</em>, nobody depends on anybody and \(k = 1\).</figcaption>
+  </figure>
+
+  <p>Evaluated naively the recurrence costs \(O(n^2)\), but one core can do much better. Scan left to right and keep a short list: entry \(r\) is the smallest value seen so far that ends an increasing subsequence of length \(r\). The list is always increasing, so each new element binary-searches for the first entry that is not smaller than it and overwrites that entry (or is appended at the end). The slot it lands in is its \(\mathit{dp}\). On the example the list goes <code>52</code>, <code>31</code>, <code>31 45</code>, <code>26 45</code>, <code>26 45 61</code>, and so on. It never has more than \(k\) entries, so the total time is \(O(n \log k)\). This is the tuned sequential baseline in our experiments, called <em>Seq-BS</em>.</p>
+
+  <p>So LIS is easy on one core. The interesting question is what happens when you have 96.</p>
+</section>
+
+<section id="hard" data-toc="Why it is hard">
+  <h2><span class="num">02</span>Why more cores do not obviously help</h2>
+
+  <p>The loop above handles element \(i\) only after elements \(1\) to \(i-1\). That is a chain of \(n\) steps, each waiting for the previous one, and a chain is exactly what extra cores cannot shorten.</p>
+
+  <div class="callout" data-reveal>
+    <span class="callout-label">Three terms used throughout</span>
+    <p><strong>Work</strong> is the total number of operations an algorithm performs, summed over all cores: what a single core would have to do. <strong>Span</strong> is the longest chain of operations that must happen one after another: the running time with unlimited cores. With \(P\) cores a good scheduler (the runtime that hands tasks to cores) finishes in roughly work\(/P\) + span. A parallel algorithm is <strong>work-efficient</strong> if its work matches the best sequential algorithm up to a constant factor.</p>
+  </div>
+
+  <p>Is the chain of length \(n\) real? Not quite. The first figure shows what an element actually needs: the \(\mathit{dp}\) values of the earlier, smaller elements, and nothing else. Two elements that do not depend on each other can be computed at the same moment. A chain of true dependences is an increasing subsequence, so the longest one has \(k\) elements, not \(n\).</p>
+
+  <p>That suggests processing the input in \(k\) rounds: first everything with \(\mathit{dp} = 1\), then everything with \(\mathit{dp} = 2\), and so on. The two obvious ways to organize those rounds are both expensive:</p>
+
+  <ul>
+    <li><strong>Follow the dependences.</strong> Let each finished element notify everyone waiting on it. But there can be \(\Theta(n^2)\) earlier-and-smaller pairs (sorting the first figure produces all of them), so this does quadratic work.</li>
+    <li><strong>Re-check everyone each round.</strong> In every round, ask each unfinished element whether it is ready. That is up to \(n\) checks per round for \(k\) rounds: \(\Omega(nk)\) work.</li>
+  </ul>
+
+  <p>Both are far above the \(O(n \log k)\) that one core needs, and a parallel algorithm that does a hundred times more work needs a hundred cores just to break even. Parallel LIS has a long line of research behind it, and the best earlier algorithms come within logarithmic factors of sequential work. Two reference points, next to the sequential algorithm and ours:</p>
+
+  <div class="table-scroll" data-reveal>
+    <table>
+      <thead>
+        <tr><th>Algorithm</th><th>Work</th><th>Span</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Sequential, binary search (Seq-BS)</td><td>\(O(n \log k)\)</td><td>same as work</td></tr>
+        <tr><td>Krusche and Tiskin, 2010</td><td>\(O(n \log^2 n)\)</td><td>\(\tilde{O}(n^{2/3})\)</td></tr>
+        <tr><td>Shen, Wan, Gu and Sun, 2022 (SWGS)</td><td>\(O(n \log^3 n)\), with high probability</td><td>\(O(k \log^2 n)\)</td></tr>
+        <tr class="ours"><td>This paper</td><td>\(O(n \log k)\)</td><td>\(O(k \log n)\)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Here \(\tilde{O}\) hides polylogarithmic factors, and &ldquo;with high probability&rdquo; means the bound holds except with a vanishingly small chance over the algorithm&rsquo;s random choices. Krusche and Tiskin&rsquo;s algorithm is stated in a different model; the bounds shown are its translation to work and span. Their span does not depend on \(k\), and a 2023 result by Cao, Huang and Su also achieves strong worst-case span.</p>
+
+  <p>SWGS, our own earlier algorithm, introduced the round-by-round framework this post follows. It finds each round with a two-dimensional search tree and randomization, which costs the extra logarithmic factors in the table and \(O(n \log n)\) space; with 96 cores and \(n\)&nbsp;=&nbsp;10<sup>8</sup> it is faster than Seq-BS for \(k\) up to about 100.</p>
+
+  <p>What this paper adds is the last row: the same \(k\) rounds, with the same work as the sequential algorithm, in \(O(n)\) space, and with an algorithm of about twenty lines. To our knowledge it is the first parallel LIS algorithm that is work-efficient and has non-trivial parallelism.</p>
+</section>
+
+<section id="prefix-min" data-toc="Prefix minima">
+  <h2><span class="num">03</span>The observation: round one is the prefix minima</h2>
+
+  <p>Which elements have \(\mathit{dp} = 1\)? Exactly those with nothing smaller before them. Reading left to right, they are the elements that set, or tie, the running minimum. Call such an element a <strong>prefix minimum</strong>: \(A_i\) is one if \(A_i \le A_j\) for every \(j &lt; i\). (Ties count, because an equal earlier element is not smaller.)</p>
+
+  <p>In the example the running minimum goes 52, 31, 31, 26, 26, 10, 10, &hellip; and it changes at 52, 31, 26 and 10. Those four have \(\mathit{dp} = 1\).</p>
+
+  <p>Now delete them and look again. Take 45: the only smaller element before it was 31, which has just been removed with \(\mathit{dp} = 1\). So 45 can extend it, and its \(\mathit{dp}\) is 2. In general, an element that is a prefix minimum of <em>what remains</em> has had every smaller predecessor removed in round one, so its \(\mathit{dp}\) is at most 2; and it survived round one, so something smaller came before it and its \(\mathit{dp}\) is at least 2. The argument repeats, and gives the lemma the whole algorithm rests on:</p>
+
+  <div class="callout" data-reveal>
+    <span class="callout-label">Lemma</span>
+    <p>An element has \(\mathit{dp} = r\) if and only if it is a prefix minimum after all elements with \(\mathit{dp} &lt; r\) have been removed.</p>
+  </div>
+
+  <p>So the algorithm is a loop with exactly \(k\) iterations: find all prefix minima, label them with the round number, remove them, repeat. The set removed in round \(r\) is called the \(r\)-th <strong>frontier</strong>. A frontier goes downhill from left to right, so none of its elements is earlier-and-smaller than another: they do not depend on each other, and a whole frontier can be handled at once.</p>
+
+  <figure class="demo" id="demo-peel">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Peel off the prefix minima</h3>
+      <p class="demo-hint">Press Play, or step with the arrows. Then change the input and watch the number of rounds change.</p>
+    </div>
+    <div class="demo-stage"><canvas aria-label="Scatter plot of the sequence. In each round the points that are prefix minima of the remaining sequence are highlighted and removed."></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <figcaption>Each round removes one descending staircase, and the round number is the \(\mathit{dp}\) value, so the number of rounds equals the LIS length: a <em>nearly reversed</em> input finishes in a handful of rounds, a <em>nearly sorted</em> one needs many. With <em>Ties</em>, an element that only ties the running minimum is removed too: equal values cannot follow each other in a strictly increasing subsequence, so they do not wait for each other. The last counter shows what this sweep costs: it reads everything that is left, every round.</figcaption>
+  </figure>
+
+  <p>That counter is why the sweep in the figure is only an illustration. Recomputing a running minimum over the whole remaining sequence costs \(O(n)\) per round and \(O(nk)\) in total, which is the &ldquo;re-check everyone&rdquo; strategy again. The real algorithm has to find each frontier while looking only at (roughly) the elements that are in it.</p>
+</section>
+
+<section id="tree" data-toc="Tournament tree">
+  <h2><span class="num">04</span>A tournament tree finds a frontier without scanning</h2>
+
+  <p>Put the input at the leaves of a complete binary tree and let every internal node store the minimum of the leaves below it. This is a <strong>tournament tree</strong> (the smaller child &ldquo;wins&rdquo; and moves up). It is stored in a plain array, like a heap: the children of node \(i\) are nodes \(2i\) and \(2i+1\). Building it takes \(O(n)\) work.</p>
+
+  <p>A round is one recursive walk from the root. The walk carries a single number down the tree, called <span class="k k-orange">LMin</span>: the minimum of <em>everything to the left of the current subtree</em>, in the whole array, as it was when the round started.</p>
+
+<pre><code>PrefixMin(i, LMin):
+    # LMin = smallest value left of this subtree
+    if T[i] == +inf or T[i] &gt; LMin:
+        return            # empty, or no prefix minimum inside
+    if i is a leaf:
+        rank[i] = r       # dp value = round number
+        T[i] = +inf       # remove it
+    else:
+        # read T[2i] before the left child runs
+        L = min(LMin, T[2i])
+        in parallel:
+            PrefixMin(2i,   LMin)
+            PrefixMin(2i+1, L)
+        # repair the minimum on the way back up
+        T[i] = min(T[2i], T[2i+1])
+
+r = 0
+while T[1] != +inf:       # one round per dp value
+    r = r + 1
+    PrefixMin(1, +inf)</code></pre>
+
+  <p>Three things are worth noticing.</p>
+
+  <ul>
+    <li><strong>One comparison can dismiss a whole subtree.</strong> If the smallest value in a subtree is already larger than something to its left, nothing inside is a prefix minimum, and the walk never enters it.</li>
+    <li><strong>The two children do not wait for each other.</strong> The right child needs the minimum of the left child&rsquo;s subtree, and that number is already stored in the tree. It is read before either child starts (the left child is about to remove elements and change it), so both halves run in parallel and the span of one round is just the depth of the tree: \(O(\log n)\).</li>
+    <li><strong>There is no separate clean-up pass.</strong> Removed leaves become \(+\infty\), and each node recomputes its minimum as the recursion returns through it.</li>
+  </ul>
+
+  <p>The figure runs this on the twelve-number example (padded to 16 leaves with \(+\infty\)). One step is one level of the tree: nodes on a level never wait for each other, so the figure shows them together.</p>
+
+  <figure class="demo" id="demo-tree">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>One round, one tree level at a time</h3>
+      <p class="demo-hint">Step with the arrows. Tap or hover any node (or focus the tree and use the arrow keys) to see what it was compared against and why it was entered or skipped.</p>
+    </div>
+    <div class="demo-stage"><canvas class="tall clickable" aria-label="Tournament tree over the twelve-element example. Each step shows which nodes are visited, skipped or removed in the current round. Arrow keys move between nodes."></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw sq go"></span>node&rsquo;s min &le; LMin: descend</span>
+      <span><span class="sw sq" style="background: var(--b-accent)"></span>leaf taken this round</span>
+      <span><span class="sw sq" style="border: 1.5px dashed var(--v-red)"></span>skipped with one comparison</span>
+      <span><span class="k k-orange">31</span> on an edge: the LMin handed down</span>
+      <span><span class="sw sq" style="background: var(--v-green); opacity: 0.5"></span>minimum recomputed</span>
+      <span><span class="chip">2</span>dp value assigned to that leaf</span>
+      <span>edges take the color of the node they lead to</span>
+    </div>
+    <figcaption>On the example input, round 1 dismisses the entire right half of the tree with a single comparison (its minimum, 20, is larger than 10 on its left). Over all five rounds the walk touches 69 nodes; rescanning the whole 31-node tree every round would touch 155. The gap widens quickly as the tree grows.</figcaption>
+  </figure>
+
+  <p>The output is the \(\mathit{dp}\) value of every element, and \(k\) is the number of rounds. Printing an actual longest subsequence takes one more small step, described in the full version of the paper: the predecessor of an element removed in round \(r\) is the last element of round \(r-1\) before it, which is always smaller.</p>
+</section>
+
+<section id="cost" data-toc="Work and span">
+  <h2><span class="num">05</span>Why the total work is only O(n log k)</h2>
+
+  <p>How many nodes does one round touch? Call a node <em>relevant</em> if at least one element of this round&rsquo;s frontier sits below it. Every node the walk enters is relevant, because the smallest leaf under an entered node is itself a prefix minimum. Every node it tests and skips is a child of a relevant node. So the nodes touched are at most about three times the relevant ones (each relevant node plus its two children), and the relevant nodes are the ones on the paths from the root to the frontier&rsquo;s leaves.</p>
+
+  <p>If the frontier has \(m\) elements, those are \(m\) root-to-leaf paths in a tree with \(n\) leaves. Near the root the paths overlap: with \(n = 16\) and \(m = 4\), the top three levels hold only \(1 + 2 + 4 = 7\) nodes however the four leaves are placed, and below them each path continues alone for the remaining \(\log(16/4) = 2\) levels. In general the shared top has about \(2m\) nodes and each path has \(\log(n/m)\) nodes of its own, so a round with a frontier of size \(m\) costs</p>
+
+  <p class="eq">$$O\bigl(m \log (n/m)\bigr)$$</p>
+
+  <p>work: big frontiers are cheap <em>per element</em>, small frontiers pay up to a full \(\log n\) each. The frontier sizes \(m_1, \dots, m_k\) add up to \(n\), and the sum \(\sum_r m_r \log(n/m_r)\) is largest when all frontiers have the same size. (Try \(n = 16\) in two rounds: sizes 8 and 8 cost \(8 \cdot 1 + 8 \cdot 1 = 16\); sizes 15 and 1 cost about \(1.4 + 4 = 5.4\).) Equal sizes \(n/k\) give \(k \cdot (n/k) \cdot \log k = n \log k\), reading every logarithm as at least 1 so that \(k = 1\) costs \(O(n)\).</p>
+
+  <div class="callout" data-reveal>
+    <span class="callout-label">Theorem (unweighted LIS)</span>
+    <p>The LIS of a sequence of length \(n\) with LIS length \(k\) can be computed in \(O(n \log k)\) work, \(O(k \log n)\) span and \(O(n)\) space.</p>
+  </div>
+
+  <p>The work matches the sequential algorithm, so the algorithm is work-efficient. The span is \(k\) rounds of depth \(O(\log n)\) each, so it grows linearly with \(k\). The ratio work/span is called the <strong>parallelism</strong>: it is roughly how many cores the algorithm can keep busy, because beyond that many the span term in work\(/P\) + span takes over. Here it is about \(n \log k / (k \log n)\), which is large whenever the LIS is short compared to the input.</p>
+
+  <p>The next figure makes this concrete. It generates \(n = 2048\) values with a chosen LIS length, runs the tree algorithm above on them, and counts what actually happened.</p>
+
+  <figure class="demo" id="demo-kdial">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Turn the k dial</h3>
+      <p class="demo-hint">Slide the LIS length from 1 to n, and change the number of cores in the model.</p>
+    </div>
+    <div class="demo-stage"><canvas class="tall" aria-label="The generated input, and a log-log chart of work, span and modeled running time against the LIS length k."></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw line" style="background: var(--b-accent)"></span>work W: tree nodes touched (measured in this page)</span>
+      <span><span class="sw line" style="background: var(--v-orange)"></span>span S: rounds &times; tree depth</span>
+      <span><span class="sw line" style="background: var(--v-blue)"></span>model of time on P cores: S + (W &minus; S)/P</span>
+      <span><span class="sw line" style="background: var(--v-gray)"></span>rescanning the whole tree every round</span>
+    </div>
+    <figcaption>Both axes are logarithmic. As \(k\) grows by a factor of 2048, the work grows by only about 12&times; while the span grows by the full 2048. The vertical gap between the two curves is the parallelism \(W/S\).</figcaption>
+  </figure>
+
+  <p>Two notes on reading the figure. The blue curve is a model that counts tree nodes and ignores every constant, and \(n\) here is tiny; on real inputs of 10<sup>8</sup> to 10<sup>9</sup> elements the same picture is stretched far to the right (measured results are in <a href="#results">section 8</a>). And the inputs are modeled on the two generators used in our experiments: few distinct values for small \(k\), a noisy rising line for large \(k\). \(O(n \log k)\) is a worst case, reached when all frontiers have the same size, as they nearly do in the first kind of input; the second kind has uneven frontiers and costs less, which is why the work curve dips in the middle.</p>
+</section>
+
+<section id="weighted" data-toc="Weighted LIS">
+  <h2><span class="num">06</span>Weights break the shortcut</h2>
+
+  <p>In the <strong>weighted</strong> version every element has a weight \(w_i\), and we want the increasing subsequence with the largest total weight rather than the largest length. The recurrence looks almost the same:</p>
+
+  <p class="eq">$$\mathit{dp}[i] \;=\; w_i + \max\Bigl(0,\; \max_{j &lt; i,\; A_j &lt; A_i} \mathit{dp}[j]\Bigr).$$</p>
+
+  <p>The dependences are unchanged, so the same \(k\) frontiers are still the right schedule. What breaks is the shortcut. In the unweighted problem the value to write in round \(r\) is simply \(r\). Now each element has to compute a real maximum over everything earlier and smaller: among all points below and to the left of mine, which has the best score? We call it a <strong>dominant-max query</strong>.</p>
+
+  <p>The algorithm becomes: compute the frontiers with the tree algorithm; then, round by round, let every element of the frontier ask its dominant-max query in parallel, add its own weight, and store the whole frontier&rsquo;s scores as one batch. This is safe because elements of one frontier never depend on each other, and everything they do depend on was stored in earlier rounds.</p>
+
+  <p>One trick makes these queries simple. Suppose a query only looks at <em>candidates</em>: elements that are already scored and have a smaller value. Then only position and score matter. A candidate is useless if an earlier candidate scores at least as much (the earlier one <em>covers</em> it). Discard the covered ones, and what is left is a <strong>staircase</strong>: scores go up as positions go right. The best score before position \(q\) is then simply the last staircase point before \(q\).</p>
+
+  <figure class="demo" id="demo-wlis">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Weighted LIS: a maximum over &ldquo;earlier and smaller&rdquo;</h3>
+      <p class="demo-hint">Step through the rounds. Tap a scored point in the first panel (or use the arrow keys there) to see the query it made in the second.</p>
+    </div>
+    <div class="demo-split">
+      <div class="demo-stage"><span class="demo-pane-label">the sequence: position &rarr; value &uarr;</span><canvas class="clickable" aria-label="The sequence with a weight inside each point and its computed score above it. Arrow keys select a point."></canvas></div>
+      <div class="demo-stage"><span class="demo-pane-label">candidates: position &rarr; score &uarr;</span><canvas aria-label="Scores of the candidates of the selected query (already scored, smaller value), with the staircase of best-so-far scores"></canvas></div>
+    </div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span>number inside a point: its weight</span>
+      <span><span class="chip" style="background: var(--v-green)">11</span>score: best total weight ending there</span>
+      <span><span class="sw sq" style="background: var(--v-green); opacity: 0.3"></span>region the selected query looks at</span>
+      <span><span class="sw line" style="background: var(--v-green)"></span>staircase of its candidates</span>
+      <span><span class="sw line" style="background: var(--v-orange)"></span>the answer: last staircase point before the query</span>
+      <span>&times; covered candidate</span>
+      <span>faded: later position, so not usable</span>
+    </div>
+    <figcaption>With the example weights the heaviest increasing subsequence (31, 45, 61, 70) is not the longest one, and scores are not ordered by round: 58 is scored a round after 61 and ends up lower. The second panel shows the staircase for one query. The real data structure does not build a staircase per query: it keeps a few fixed ones and combines their answers, as described next.</figcaption>
+  </figure>
+
+  <p>How does a query get &ldquo;only the elements with a smaller value&rdquo;? Sort the elements by value and build a balanced tree over that order, so each tree node stands for a contiguous range of values. Any set of the form &ldquo;all values below \(x\)&rdquo; is the union of \(O(\log n)\) such nodes, the same way a binary search visits \(O(\log n)\) nodes. In the example, &ldquo;smaller than 58&rdquo; is the node holding the eight smallest values plus the node holding 52. If every node keeps a second structure over its own elements, ordered by position, that can answer &ldquo;best score before position \(q\)&rdquo;, a query asks \(O(\log n)\) nodes and takes the best answer.</p>
+
+  <p>This two-level structure is a <strong>range tree</strong>. With an ordinary balanced search tree inside each node, one inner lookup costs \(O(\log n)\), a query costs \(O(\log^2 n)\), and the weighted algorithm takes \(O(n \log^2 n)\) work and \(O(k \log^2 n)\) span. This is the version we implemented and measured.</p>
+</section>
+
+<section id="veb" data-toc="vEB trees">
+  <h2><span class="num">07</span>Where van Emde Boas trees come in</h2>
+
+  <p>Can the inner lookup be faster than \(O(\log n)\)? If each node of the range tree stores its elements as a staircase, &ldquo;best score before position \(q\)&rdquo; becomes a <em>predecessor</em> query: find the last stored position before \(q\). Positions are integers between 1 and \(n\), whatever the input values are, and for integers there is a classic structure that is faster than a search tree.</p>
+
+  <p>A <strong>van Emde Boas (vEB) tree</strong> stores a set of integers from \(\{0, \dots, U-1\}\) and supports insert, delete and predecessor in \(O(\log \log U)\) time instead of \(O(\log U)\). (It gets there by splitting each key&rsquo;s bits in half at every level; for this post it is a black box.) With \(U = n\), a dominant-max query drops from \(O(\log^2 n)\) to \(O(\log n \log \log n)\).</p>
+
+  <p>The staircase trick for queries was known. The new part is the update: every round inserts a whole frontier into \(O(\log n)\) staircases and deletes the old points that the new ones cover, and to keep the span low all of that has to happen in parallel. To our knowledge there was no parallel vEB tree before, so the second half of the paper builds one:</p>
+
+  <div class="callout" data-reveal>
+    <span class="callout-label">Theorem (parallel vEB tree)</span>
+    <p>For a sorted batch \(B\) of keys, batch insertion and batch deletion take \(O(|B| \log \log U)\) work and \(O(\log U \log \log U)\) span. Reporting the \(m\) keys in a range takes \(O((1 + m) \log \log U)\) work and the same span. Single-key operations are unchanged from the sequential vEB tree.</p>
+  </div>
+
+  <p>A sorted batch splits into groups that go to independent parts of the tree, which is where the parallelism comes from; batch deletion needs the most care and takes up most of that part of the paper.</p>
+
+  <p>Plugged into the weighted algorithm, this gives \(O(n \log n \log \log n)\) work, \(O(k \log^2 n)\) span and \(O(n \log n)\) space (with a space-saving relabeling described in the full version). This is the theoretical result; the measurements in the next section use range trees. Matching the sequential \(O(n \log n)\) bound for weighted LIS in parallel is an open problem.</p>
+</section>
+
+<section id="results" data-toc="Results">
+  <h2><span class="num">08</span>How fast is it on a real machine?</h2>
+
+  <p>We ran the experiments on a machine with 96 cores (192 hyperthreads, two hardware threads per core) on synthetic inputs of 10<sup>8</sup> and 10<sup>9</sup> elements, sweeping the LIS length \(k\). The baselines are Seq-BS (the tuned sequential algorithm from <a href="#problem">section 1</a>), a sequential \(O(n \log n)\) weighted algorithm built on an AVL tree (Seq-AVL), and SWGS (the earlier parallel algorithm). Parallel times use all 96 cores.</p>
+
+  <div class="stats" data-reveal>
+    <div class="stat"><span class="stat-num">16.8&times;</span><span class="stat-label">faster than Seq-BS at best, on 96 cores (\(n\)&nbsp;=&nbsp;10<sup>8</sup>, small \(k\))</span></div>
+    <div class="stat"><span class="stat-num">188&times;</span><span class="stat-label">faster than SWGS at best, both on 96 cores (\(n\)&nbsp;=&nbsp;10<sup>8</sup>)</span></div>
+    <div class="stat"><span class="stat-num">3&times;10<sup>5</sup></span><span class="stat-label">LIS length \(k\) up to which it beats Seq-BS at \(n\)&nbsp;=&nbsp;10<sup>9</sup></span></div>
+    <div class="stat"><span class="stat-num">37.0&times;</span><span class="stat-label">self-speedup, 192 hyperthreads vs. one thread (\(n\)&nbsp;=&nbsp;10<sup>9</sup>, \(k\)&nbsp;=&nbsp;10<sup>4</sup>)</span></div>
+  </div>
+
+  <div class="table-scroll" data-reveal>
+    <table>
+      <thead>
+        <tr><th>Setting</th><th>Compared with the sequential baseline</th><th>Compared with SWGS</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>LIS, \(n\)&nbsp;=&nbsp;10<sup>8</sup></td><td>faster than Seq-BS for \(k\)&nbsp;&le;&nbsp;3&times;10<sup>4</sup>, by up to 16.8&times;; on a single core it stays within 1.4&ndash;5.5&times; of Seq-BS</td><td>always faster, by up to 188&times; (SWGS was run up to \(k\)&nbsp;=&nbsp;10<sup>4</sup>)</td></tr>
+        <tr><td>LIS, \(n\)&nbsp;=&nbsp;10<sup>9</sup></td><td>faster than Seq-BS for \(k\)&nbsp;&le;&nbsp;3&times;10<sup>5</sup>, by up to 9.1&times;; within 3.4&times; for larger \(k\)</td><td>SWGS ran out of memory at this size</td></tr>
+        <tr><td>Weighted LIS, \(n\)&nbsp;=&nbsp;10<sup>8</sup> (range trees)</td><td>faster than Seq-AVL for \(k\) up to 100</td><td>always faster, by up to 2.5&times; (\(k\) from 1 to 3000)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>The single-core numbers are work-efficiency in practice: the same work as Seq-BS up to a constant, and the measured constant is 1.4&ndash;5.5. That is what lets the algorithm overtake Seq-BS with only 8 to 16 cores at \(n\)&nbsp;=&nbsp;10<sup>9</sup>. Its self-speedup there reaches 25.6&times; at \(k\)&nbsp;=&nbsp;10<sup>2</sup> and 37.0&times; at \(k\)&nbsp;=&nbsp;10<sup>4</sup> on 192 hyperthreads. We believe this is the first parallel LIS implementation that beats the efficient sequential algorithm over a large range of inputs.</p>
+
+  <p><strong>Scope.</strong> The algorithm targets inputs whose LIS is short relative to \(n\), where the span \(O(k \log n)\) leaves plenty of room for parallelism. For scale, a random sequence has an LIS of length about \(2\sqrt{n}\), which is 2&times;10<sup>4</sup> for \(n\)&nbsp;=&nbsp;10<sup>8</sup> and about 6&times;10<sup>4</sup> for \(n\)&nbsp;=&nbsp;10<sup>9</sup>; in our tests the parallel algorithm wins for every \(k\) from 1 up to beyond those values.</p>
+</section>
+
+<section id="recap" data-toc="Recap">
+  <h2><span class="num">09</span>Recap</h2>
+
+  <ul>
+    <li><strong>The idea.</strong> The \(\mathit{dp}\) value of an element is the round in which it becomes a prefix minimum, if you keep removing prefix minima. So LIS takes exactly \(k\) rounds, and everything within a round is independent.</li>
+    <li><strong>Why it is cheap.</strong> A tournament tree with one number passed down (the minimum of everything to the left) finds each round&rsquo;s elements while skipping whole subtrees with single comparisons. The total work is \(O(n \log k)\), the same as the best sequential algorithm, with \(O(k \log n)\) span and \(O(n)\) space.</li>
+    <li><strong>What it achieved.</strong> A parallel LIS that is work-efficient in theory and fast in practice: up to 16.8&times; faster than a tuned sequential implementation on 96 cores, and up to 188&times; faster than the previous parallel algorithm, in about twenty lines of pseudocode.</li>
+    <li><strong>Beyond LIS.</strong> With weights, every element needs a two-dimensional max query each round. Range trees make that practical, and a new parallel van Emde Boas tree, a batch-parallel version of a classic data structure, makes it asymptotically faster.</li>
+  </ul>
+
+  <p>The paper has the proofs, the full vEB construction and all the experiments, and the code is public (links at the top).</p>
+</section>

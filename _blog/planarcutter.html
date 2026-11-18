@@ -1,0 +1,451 @@
+---
+title: "PlanarCutter: Cutting Road Networks with Shortest Paths"
+short_title: "PlanarCutter"
+slug_id: planarcutter
+order: 3
+date: 2026-11-01
+venue: "Preprint"
+topics: ["Graph partitioning", "Road networks"]
+lead: "Route planners spend most of their preprocessing time cutting the map into pieces. On a nearly planar road network, a good cut is a shortest path in disguise, and a shortest path can be found by a parallel breadth-first search."
+summary: "Splitting a road network into balanced pieces usually means many max-flow computations. On a nearly planar map, a minimum separator is a shortest path through the city blocks, which a parallel breadth-first search finds in as many rounds as the separator has vertices."
+excerpt: "An interactive explainer of PlanarCutter, a parallel partitioner for road networks that finds separators as shortest paths in the radial graph."
+authors: "Zijin Wan, Yihan Sun, Yan Gu"
+accent: "#0f7f4d"
+accent_dark: "#5fd39a"
+script: planarcutter.js
+---
+
+<style>
+.blog-post[data-post="planarcutter"] .pc-pipe { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.6rem; margin-top: 1.6rem; margin-bottom: 0.6rem; }
+.blog-post[data-post="planarcutter"] .pc-stage { padding: 0.8rem 0.9rem; border: 1px solid var(--b-line); border-radius: 12px; background: var(--b-panel); }
+.blog-post[data-post="planarcutter"] .pc-stage.pc-hot { border-color: var(--b-accent); box-shadow: inset 0 3px 0 var(--b-accent); }
+.blog-post[data-post="planarcutter"] .pc-when { display: block; margin-bottom: 0.35rem; color: var(--b-muted); font-size: 0.64rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.blog-post[data-post="planarcutter"] .pc-stage b { display: block; color: var(--b-ink); font-size: 1rem; line-height: 1.2; }
+.blog-post[data-post="planarcutter"] .pc-what { display: block; margin: 0.2rem 0 0.5rem; color: var(--b-muted); font-size: 0.74rem; line-height: 1.35; }
+.blog-post[data-post="planarcutter"] .pc-time { display: block; color: var(--b-ink); font-size: 0.82rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.blog-post[data-post="planarcutter"] .pc-time s { color: var(--b-muted); font-weight: 500; }
+.blog-post[data-post="planarcutter"] .pc-note { margin-top: 0; color: var(--b-muted); font-size: 0.76rem; }
+.blog-post[data-post="planarcutter"] .pc-static { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin-top: 1.4rem; margin-bottom: 0.6rem; border: 1px solid var(--b-line); border-radius: 16px; background: var(--b-line); overflow: hidden; }
+.blog-post[data-post="planarcutter"] .pc-static svg { display: block; width: 100%; height: auto; background: var(--b-stage); }
+.blog-post[data-post="planarcutter"] .pc-static .road { stroke: var(--v-gray); stroke-width: 2.4; }
+.blog-post[data-post="planarcutter"] .pc-static .short { stroke: var(--b-text); stroke-width: 1.8; stroke-dasharray: 6 4; opacity: 0.75; }
+.blog-post[data-post="planarcutter"] .pc-static .link { stroke: var(--v-gray); stroke-width: 2; }
+.blog-post[data-post="planarcutter"] .pc-static .ca { stroke: var(--v-blue); stroke-width: 4; stroke-linecap: round; }
+.blog-post[data-post="planarcutter"] .pc-static .cc { stroke: var(--v-orange); stroke-width: 4; stroke-linecap: round; }
+.blog-post[data-post="planarcutter"] .pc-static circle { fill: var(--b-stage); stroke: var(--b-muted); stroke-width: 1.6; }
+.blog-post[data-post="planarcutter"] .pc-static text { fill: var(--b-ink); font-size: 13px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+.blog-post[data-post="planarcutter"] .pc-static text.lab { fill: var(--b-muted); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-anchor: start; text-transform: uppercase; }
+.blog-post[data-post="planarcutter"] .pc-refs { padding-left: 1.1rem; color: var(--b-muted); font-size: 0.78rem; line-height: 1.5; }
+.blog-post[data-post="planarcutter"] .pc-refs li { margin-bottom: 0.25rem; }
+@media (max-width: 760px) { .blog-post[data-post="planarcutter"] .pc-pipe { grid-template-columns: repeat(2, minmax(0, 1fr)); } .blog-post[data-post="planarcutter"] .pc-static { grid-template-columns: minmax(0, 1fr); } }
+</style>
+
+<section id="hook" data-toc="Motivation">
+  <h2><span class="num">01</span>The slow part of a fast router</h2>
+
+  <p>Ask a routing engine for the fastest drive across Europe and the answer comes back in about a third of a millisecond. Dijkstra&rsquo;s algorithm, the textbook shortest-path method, needs about 8.6 seconds on the same map: the OpenStreetMap car network of Europe (an October 2026 extract with 100 million vertices). The difference is an <strong>index</strong>: extra data, computed ahead of time, that lets a query skip almost all of the map.</p>
+
+  <p>The index behind many routing engines is a <a href="/blog/parallel-ch/#contraction">contraction hierarchy</a>. Every junction gets a rank. The junctions are then removed one by one, from the lowest rank to the highest, and whenever a removal would break a route, a <em>shortcut</em> edge is added between the neighbors left behind. A query only follows edges that lead to higher-ranked junctions, which takes it through a tiny part of the network.</p>
+
+  <p>Real maps do not hold still, and they change in two different ways. Traffic changes the <em>travel times</em> every few minutes. New roads change the <em>shape</em> of the network every day. <strong>Customizable contraction hierarchies</strong> (CCH) split the work so that the first kind of change is cheap:</p>
+
+  <div class="pc-pipe wide" data-reveal>
+    <div class="pc-stage pc-hot"><span class="pc-when">When roads change</span><b>1. Order</b><span class="pc-what">Rank every junction, looking only at the shape of the network.</span><span class="pc-time"><span class="b-sr">before: </span><s>1091 s</s> &rarr; <span class="b-sr">now: </span>55.0 s</span></div>
+    <div class="pc-stage pc-hot"><span class="pc-when">When roads change</span><b>2. Build</b><span class="pc-what">Contract in that order and record where shortcuts go.</span><span class="pc-time"><span class="b-sr">before: </span><s>63.6 s</s> &rarr; <span class="b-sr">now: </span>3.22 s</span></div>
+    <div class="pc-stage"><span class="pc-when">When traffic changes</span><b>3. Customize</b><span class="pc-what">Fill in travel times for every shortcut.</span><span class="pc-time">about 1.2 s</span></div>
+    <div class="pc-stage"><span class="pc-when">Every request</span><b>4. Query</b><span class="pc-what">Climb the hierarchy from both ends.</span><span class="pc-time">about 350 &micro;s</span></div>
+  </div>
+  <p class="pc-note">OpenStreetMap Europe on 112 cores. Struck-out times: InertialFlowCutter, the tool that computes the best orders, followed by the sequential build of RoutingKit. New times: PlanarCutter.</p>
+
+  <p>Stage 3 is what makes CCH attractive: new traffic data costs about a second. A new road is different. It changes the shape of the network, so the order and the shortcut structure are out of date, and the clean response is to run stages 1 and 2 again. With the tools that give the best index, InertialFlowCutter and RoutingKit, that takes 19 minutes on 112 cores, almost all of it in stage 1.</p>
+
+  <p>Stage 1 is, underneath, a geometry problem: <em>cut the map into pieces, again and again</em>. PlanarCutter, our tool for this stage, makes those cuts with a breadth-first search instead of a maximum-flow computation. That is less work, and it is much easier to run in parallel.</p>
+
+  <div class="stats" data-reveal>
+    <div class="stat"><span class="stat-num">58 s</span><span class="stat-label">order + build for OSM Europe on 112 cores; 19.2 min with InertialFlowCutter + RoutingKit</span></div>
+    <div class="stat"><span class="stat-num">8.8&times;</span><span class="stat-label">faster ordering than InertialFlowCutter, 112 threads for both, geometric mean over the ten networks above 10 million vertices</span></div>
+    <div class="stat"><span class="stat-num">2.2% smaller</span><span class="stat-label">search space (what one query touches, <a href="#nested-dissection">section 3</a>) than with InertialFlowCutter, geometric mean over all 16 networks</span></div>
+  </div>
+
+  <p class="pc-note">A geometric mean is the usual way to average ratios over networks of very different sizes: multiply the \(n\) ratios and take the \(n\)-th root.</p>
+
+  <p class="callout"><span class="callout-label">About the numbers</span>All measurements come from the current preprint of our paper: 16 road networks, one machine with 112 cores (224 hyperthreads, two hardware threads per core), and 112 threads unless stated otherwise. Our code will be open-sourced.</p>
+</section>
+
+<section id="separators" data-toc="Separators">
+  <h2><span class="num">02</span>Where to cut a map</h2>
+
+  <p>Picture a town split by a river with three bridges. Close those three bridges and the two halves of the town are disconnected: every trip from one bank to the other had to use one of them.</p>
+
+  <p>In graph terms, junctions are <em>vertices</em> and the road segments between them are <em>edges</em>; this post uses both vocabularies. The three bridge ends are a <strong>vertex separator</strong>: a set of vertices whose removal splits the network into parts that no road connects. Two things make a separator useful. It should be <strong>small</strong>, and it should be <strong>balanced</strong>, meaning that both sides are large. Cutting off a single dead-end street is small but useless.</p>
+
+  <p>A common score weighs the two against each other. If a separator \(X\) leaves the sides \(A\) and \(B\), its <strong>expansion</strong> is the size of the separator divided by the size of the smaller side, \( |X| / \min(|A|, |B|) \). Lower is better.</p>
+
+  <figure class="demo" id="demo-cut">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Cut the town yourself</h3>
+      <p class="demo-hint">Click or tap junctions to close them (keyboard: arrow keys, then Enter). Try to split the town into two large sides with as few closed junctions as you can.</p>
+    </div>
+    <div class="demo-stage"><canvas class="clickable" aria-label="A small town road network with a river. Selecting junctions closes them and shows whether the town falls apart."></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--v-blue)"></span>largest piece</span>
+      <span><span class="sw" style="background: var(--v-orange)"></span>second largest piece</span>
+      <span><span class="sw" style="background: var(--v-gray)"></span>smaller pieces</span>
+      <span><span class="sw" style="background: var(--v-red)"></span>closed junction</span>
+    </div>
+    <figcaption>A separator is a set of junctions, not a line on the map. In the first town the best cut closes one end of each of the three bridges. Finding the best balanced separator of an arbitrary graph is NP-hard (no efficient exact algorithm is known), so practical tools, ours included, are heuristics.</figcaption>
+  </figure>
+
+  <p>Why would a route planner care? A separator says something about <em>every</em> route between its two sides: it must pass through one of those few junctions. The next section turns that into an order.</p>
+</section>
+
+<section id="nested-dissection" data-toc="Nested dissection">
+  <h2><span class="num">03</span>Cut, then cut again</h2>
+
+  <p><strong>Nested dissection</strong> turns cuts into an order: find a separator, do the same inside each part, and keep going until the parts are tiny. The rule for the ranks is <em>parts first, separator last</em>. The top separator gets the highest ranks, the separators inside each half come just below, and so on down.</p>
+
+  <p>Building a CCH from an order uses no travel times at all. Remove the junctions from the lowest rank to the highest. When a junction is removed, connect <em>every</em> pair of its remaining neighbors, because without travel times you cannot know which of those connections a shortest route will need. Each new connection is a shortcut.</p>
+
+  <p>This is why parts go first. Removing a junction inside one part can only connect junctions of that part and of the separator around it, so no shortcut ever joins the two sides of a separator.</p>
+
+  <p>Here is the whole construction on a town of eight junctions. Nested dissection picks G and H as the top separator; in the west half E separates A from B, and in the east half F separates C from D. Parts first, separators last gives the order A, B, C, D, E, F, G, H. Removing A connects its remaining neighbors E and H. B, C and D add one shortcut each in the same way, and E, F, G and H add none: four shortcuts in total.</p>
+
+  <div class="pc-static" data-reveal>
+    <svg viewBox="0 0 350 230" role="img" aria-label="A town of eight junctions: the cycle E, B, G, C, F, D, H, A with one extra road from G to H, and four dashed shortcuts E to G, E to H, F to G and F to H.">
+      <text class="lab" x="12" y="18">Town, shortcuts dashed</text>
+      <line class="short" x1="40" y1="120" x2="175" y2="40"/><line class="short" x1="40" y1="120" x2="175" y2="200"/>
+      <line class="short" x1="310" y1="120" x2="175" y2="40"/><line class="short" x1="310" y1="120" x2="175" y2="200"/>
+      <line class="road" x1="40" y1="120" x2="110" y2="62"/><line class="road" x1="110" y1="62" x2="175" y2="40"/>
+      <line class="road" x1="175" y1="40" x2="240" y2="62"/><line class="road" x1="240" y1="62" x2="310" y2="120"/>
+      <line class="road" x1="310" y1="120" x2="240" y2="178"/><line class="road" x1="240" y1="178" x2="175" y2="200"/>
+      <line class="road" x1="175" y1="200" x2="110" y2="178"/><line class="road" x1="110" y1="178" x2="40" y2="120"/>
+      <line class="road" x1="175" y1="40" x2="175" y2="200"/>
+      <circle cx="40" cy="120" r="14"/><text x="40" y="120">E</text>
+      <circle cx="110" cy="62" r="14"/><text x="110" y="62">B</text>
+      <circle cx="110" cy="178" r="14"/><text x="110" y="178">A</text>
+      <circle cx="175" cy="40" r="14"/><text x="175" y="40">G</text>
+      <circle cx="175" cy="200" r="14"/><text x="175" y="200">H</text>
+      <circle cx="240" cy="62" r="14"/><text x="240" y="62">C</text>
+      <circle cx="240" cy="178" r="14"/><text x="240" y="178">D</text>
+      <circle cx="310" cy="120" r="14"/><text x="310" y="120">F</text>
+    </svg>
+    <svg viewBox="0 0 350 230" role="img" aria-label="The elimination tree of the town: H at the top, G below it, E and F below G, A and B below E, C and D below F. The climb from A through E, G and H and the climb from C through F, G and H are highlighted.">
+      <text class="lab" x="12" y="18">Elimination tree</text>
+      <line class="link" x1="135" y1="198" x2="95" y2="142"/><line class="link" x1="295" y1="198" x2="255" y2="142"/>
+      <line class="ca" x1="55" y1="198" x2="95" y2="142"/><line class="ca" x1="95" y1="142" x2="172" y2="88"/><line class="ca" x1="172" y1="88" x2="172" y2="36"/>
+      <line class="cc" x1="215" y1="198" x2="255" y2="142"/><line class="cc" x1="255" y1="142" x2="178" y2="88"/><line class="cc" x1="178" y1="88" x2="178" y2="36"/>
+      <circle cx="175" cy="36" r="14"/><text x="175" y="36">H</text>
+      <circle cx="175" cy="88" r="14"/><text x="175" y="88">G</text>
+      <circle cx="95" cy="142" r="14"/><text x="95" y="142">E</text>
+      <circle cx="255" cy="142" r="14"/><text x="255" y="142">F</text>
+      <circle cx="55" cy="198" r="14"/><text x="55" y="198">A</text>
+      <circle cx="135" cy="198" r="14"/><text x="135" y="198">B</text>
+      <circle cx="215" cy="198" r="14"/><text x="215" y="198">C</text>
+      <circle cx="295" cy="198" r="14"/><text x="295" y="198">D</text>
+    </svg>
+  </div>
+  <p class="pc-note">The eight-junction town and its elimination tree. The letters are in rank order, A lowest. Highlighted: the climbs of a query from <span class="k k-blue">A</span> and from <span class="k k-orange">C</span>.</p>
+
+  <p>Now give every junction a <em>parent</em>: among its neighbors of higher rank, roads and shortcuts alike, the one with the lowest rank. E&rsquo;s higher neighbors are G and H, so E&rsquo;s parent is G. The parents form the <strong>elimination tree</strong>.</p>
+
+  <p>A query climbs this tree from both of its endpoints, all the way to the top, and the answer is the best junction the two climbs have in common. From A the climb is A, E, G, H; from C it is C, F, G, H. If every road takes one minute, meeting at G costs four minutes and meeting at H costs three (the route A, H, G, C), so the first junction the climbs share is not always the best one. What one climb touches, here four of the eight junctions and the edges leading up from them, is the <strong>search space</strong> of that junction. Its average over all junctions is what query time follows.</p>
+
+  <figure class="demo" id="demo-nd">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>The order decides the index</h3>
+      <p class="demo-hint">Press Play to run the recursion on a town of 70 junctions. Then select any junction to see its climb, and switch the order to compare.</p>
+    </div>
+    <div class="demo-split">
+      <div class="demo-stage"><span class="demo-pane-label">Map</span><canvas class="clickable" aria-label="Town map. Separators found by nested dissection are colored by recursion depth; selecting a junction marks it."></canvas></div>
+      <div class="demo-stage"><span class="demo-pane-label">Elimination tree</span><canvas class="clickable" aria-label="The elimination tree of the same town for the chosen order."></canvas></div>
+    </div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend"></div>
+    <figcaption>The map shades each separator by the depth at which it was found; the tree has the top separator on top. Ringed vertices are the climb of the marked junction. A single junction can be lucky in any order, so compare the average climb in the readout. Everything is computed in your browser by a miniature version of the method described below.</figcaption>
+  </figure>
+
+  <p>With nested dissection, a climb leaves its own little cell and then passes through separators higher and higher up. Small separators keep each of those steps short, and balanced separators keep their number low.</p>
+
+  <p>That is why separator quality decides query speed. General-purpose graph partitioners such as ParMETIS and KaHIP are not tuned for this task: as a source of CCH orders, ParMETIS and the fast configuration of KaHIP give 2.5&times; and 3.0&times; the search space of InertialFlowCutter in our measurements (geometric mean over the 16 networks), and on Europe their queries are 4.3&times; to 6.5&times; slower. KaHIP&rsquo;s slower <em>eco</em> configuration comes within 19% of InertialFlowCutter on the four smallest networks, at a much longer running time.</p>
+
+  <p class="callout"><span class="callout-label">So the real problem is</span>Find small, balanced separators of a huge road network, over and over, as fast as possible. The first cuts are the expensive ones: they look at the whole map, before the recursion has produced any independent pieces to work on in parallel.</p>
+</section>
+
+<section id="wall" data-toc="The wall">
+  <h2><span class="num">04</span>A cut is a shortest path in disguise</h2>
+
+  <p>The partitioners that produce good orders for road networks are flow-based. <strong>Inertial Flow</strong> sorts the junctions along a direction, say from south to north, and declares the southernmost and the northernmost fraction to be two <strong>terminals</strong>, <span class="k k-blue">S</span> and <span class="k k-orange">T</span>. It then computes the smallest set of junctions that separates <span class="k k-blue">S</span> from <span class="k k-orange">T</span>. <strong>FlowCutter</strong> grows its two terminals step by step, without coordinates, and returns a whole series of cuts from small to balanced. <strong>InertialFlowCutter</strong> (IFC), the current state of the art, combines the two. Underneath, all three answer the same question many times: what is the smallest separator between these two terminals?</p>
+
+  <p>That question is classical, and <strong>maximum flow</strong> answers it. Think of sending as many cars as possible from <span class="k k-blue">S</span> to <span class="k k-orange">T</span> at the same time, where each junction has room for one route only. The algorithm keeps adding one more route. Each addition is called an <em>augmenting path</em>: a search looks for a way through the junctions that are still unused, and it may push an earlier route onto a detour to make room. When no route can be added, there are, say, \(k\) routes that share no junction, and a theorem of Menger says that exactly \(k\) junctions are enough to block them all. Those \(k\) junctions are the separator.</p>
+
+  <p>Hold on to one detail for <a href="#rounds">section 5</a>: a separator of size \(k\) needs at least \(k\) augmenting paths, and they are extracted one after another, each depending on the ones before.</p>
+
+  <h3>The observation</h3>
+
+  <p>Road networks are almost <strong>planar</strong>: drawn on the map, roads meet only at junctions, apart from the occasional bridge or underpass. A planar drawing cuts the plane into regions enclosed by roads. Think city blocks, parks, lakes. These regions are called <strong>faces</strong>.</p>
+
+  <p>Put <span class="k k-blue">S</span> along the south edge of the map and <span class="k k-orange">T</span> along the north edge, and draw a line across the map with a pen, from the west edge to the east edge. The pen may wander freely through the inside of a block. It may never cross a road in the middle. To get from one block to the next it has to go through a junction. Call such a line a <strong><span class="k k-red">wall</span></strong>.</p>
+
+  <p>Every road from <span class="k k-blue">S</span> to <span class="k k-orange">T</span> has to get past the wall, and the wall touches the road network only at junctions. So the junctions on the wall are a separator, and the fewer junctions the wall touches, the smaller the separator. <em>The smallest separator is the wall that touches the fewest junctions</em>, and that is a shortest-path question.</p>
+
+  <p>To make it one precisely, build a second graph, the <strong>radial graph</strong>. It has a node for every junction and a node for every face, and it links each face to the junctions on its border. A wall is a path in this graph that alternates junction, face, junction, face. Give every junction a cost of 1 and every face a cost of 0.</p>
+
+  <p>Where does the wall start and end? Walk once around the outer boundary of the map. You pass <span class="k k-blue">S</span>, then a stretch of junctions that belong to neither terminal, then <span class="k k-orange">T</span>, then a second such stretch. Junctions in neither terminal are called <em>free</em>; the first free stretch holds the <span class="k k-green">start vertices</span> and the second the <span class="k k-purple">end vertices</span>. The cheapest path in the radial graph from a start vertex to an end vertex is a minimum separator between <span class="k k-blue">S</span> and <span class="k k-orange">T</span>.</p>
+
+  <p>Because the costs are 0 and 1 in a strictly alternating pattern, no priority queue is needed. A plain <strong>breadth-first search</strong> (BFS), the algorithm that explores a graph in rings of increasing distance, finds the wall. The start vertices are round 1. Each further round goes from the current junctions into the faces they touch and on to the free junctions of those faces; the junctions reached in the latest round are the <em>frontier</em>. The search stops when it reaches an end vertex, and the number of rounds is the number of junctions on the wall.</p>
+
+  <figure class="demo" id="demo-wall">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Find the wall with a breadth-first search</h3>
+      <p class="demo-hint">Press Play to run the search one round at a time. Then change the map or the direction of the cut and run it again.</p>
+    </div>
+    <div class="demo-stage"><canvas class="tall" aria-label="A road network with two terminal sets. A breadth-first search spreads through junctions and faces round by round until it has crossed the map; the path it found is the separator."></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--v-blue)"></span>terminal S</span>
+      <span><span class="sw" style="background: var(--v-orange)"></span>terminal T</span>
+      <span><span class="sw" style="background: transparent; box-shadow: inset 0 0 0 2px var(--v-green)"></span>start vertices</span>
+      <span><span class="sw" style="background: transparent; box-shadow: inset 0 0 0 2px var(--v-purple)"></span>end vertices</span>
+      <span><span class="sw" style="background: var(--v-teal)"></span>reached, with its round</span>
+      <span><span class="sw sq" style="background: var(--v-teal)"></span>face node of the radial graph (terminals and the outer face are left out)</span>
+      <span><span class="sw line" style="background: var(--v-red)"></span>the wall</span>
+      <span><span class="sw line" style="background: none; height: 0; border-top: 3px dotted var(--v-pink)"></span>shortest route along roads</span>
+      <span><span class="sw line" style="background: var(--v-blue)"></span><span class="sw line" style="background: var(--v-orange)"></span>roads on the S side and the T side once the wall is found</span>
+    </div>
+    <figcaption>The max-flow check in the readout is an independent maximum-flow computation on the same terminals; it always agrees. Tick &ldquo;Route along roads&rdquo; to see why a wall is not a road: in the paper&rsquo;s example the shortest route between the two ends has 10 junctions, the wall 4. The demo towns have a ring road, so their outer boundary is a clean loop; on real maps the terminals are trimmed until the boundary has this shape.</figcaption>
+  </figure>
+
+  <p class="callout"><span class="callout-label">The exact statement</span>The lemma holds for a connected <em>plane</em> graph (a drawing with no crossings) whose outer boundary reads, in order: terminal <span class="k k-blue">S</span>, free vertices, terminal <span class="k k-orange">T</span>, free vertices. The wall runs between the two free stretches, does not enter a terminal, and does not use the outer face, the unbounded region around the map. It gives the minimum separator <em>for those two terminals</em>; balance comes from how the terminals are chosen.</p>
+
+  <p>The correspondence is classical: a minimum cut between two terminals on the same face of a planar graph is a shortest path in the dual graph (Itai and Shiloach 1979; Hassin 1981), and the radial graph is the standard counterpart for vertex separators (Miller 1986). Planar cycle separators have also been engineered for road networks before.</p>
+
+  <p>What is new in PlanarCutter is using the shortest-path form as the engine of a nested-dissection partitioner, running many candidates as one parallel BFS (<a href="#rounds">section 5</a>), and handling crossings by tunneling with a parity repair that we prove valid (<a href="#bridges">section 6</a>). The geometric terminals come from Inertial Flow; the expansion score, the reduction to a core graph and the local refinement come from InertialFlowCutter and multilevel partitioners. To our knowledge, no earlier implementation computes road-network separators this way.</p>
+</section>
+
+<section id="rounds" data-toc="Rounds">
+  <h2><span class="num">05</span>k rounds instead of k searches</h2>
+
+  <p>Both methods return a separator of the same size \(k\), and both get there in \(k\) steps, one after the other. The difference is what happens <em>inside</em> a step.</p>
+
+  <figure class="demo" id="demo-race">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Augmenting paths versus BFS rounds</h3>
+      <p class="demo-hint">Press Play, or step through both methods on the same town. Watch how one step is carried out in each pane.</p>
+    </div>
+    <div class="demo-split">
+      <div class="demo-stage"><span class="demo-pane-label">Max flow: one path at a time</span><canvas aria-label="Maximum flow finds vertex-disjoint routes from S to T one after another; each new augmenting path is traced as a single trail."></canvas></div>
+      <div class="demo-stage"><span class="demo-pane-label">Wall BFS: one round at a time</span><canvas aria-label="The wall BFS expands a frontier across the map round by round; all vertices of a round appear at once."></canvas></div>
+    </div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--v-blue)"></span>terminal S</span>
+      <span><span class="sw" style="background: var(--v-orange)"></span>terminal T</span>
+      <span><span class="sw line" style="background: var(--v-purple)"></span>max flow: routes found so far</span>
+      <span><span class="sw line" style="background: var(--v-pink)"></span>max flow: this step&rsquo;s augmenting path</span>
+      <span><span class="sw" style="background: transparent; box-shadow: inset 0 0 0 2px var(--v-green)"></span>BFS: start vertices</span>
+      <span><span class="sw" style="background: transparent; box-shadow: inset 0 0 0 2px var(--v-purple)"></span>BFS: end vertices</span>
+      <span><span class="sw" style="background: var(--v-teal)"></span>BFS: reached, with its round</span>
+      <span><span class="sw" style="background: var(--v-red)"></span>separator</span>
+      <span><span class="sw line" style="background: var(--v-blue)"></span><span class="sw line" style="background: var(--v-orange)"></span>roads on the S side and the T side at the end</span>
+    </div>
+    <figcaption>An illustration of how the steps depend on each other, not a measurement. Max flow is shown in its textbook form: an augmenting path is one trail, and it may cancel part of an older route. A BFS round is one loop over the frontier with independent iterations, apart from ties over who reaches a junction first, which a fixed rule settles. The strip under each map draws the difference.</figcaption>
+  </figure>
+
+  <p>One BFS round is a loop. For every junction of the frontier: mark the faces it touches. For every newly marked face: mark its free junctions. Each iteration looks only at its own junction or face, so the frontier can be divided among the cores and all of them work at once. When two iterations reach the same junction, the one with the smallest hashed id becomes its parent in the search, so the result does not depend on timing.</p>
+
+  <p>One augmenting-path search is a single trail. It has to be followed step by step from <span class="k k-blue">S</span> until it arrives at <span class="k k-orange">T</span>, and what the next search may use depends on every route laid down before it. InertialFlowCutter finds each path by its own graph search; Dinic&rsquo;s algorithm, which Inertial Flow uses, groups the paths into phases but still extracts them one at a time. PlanarCutter replaces these \(k\) dependent searches by \(k\) rounds, and each round is a <strong>parallel loop</strong>.</p>
+
+  <p>Two effects add up. One BFS per pair of terminals is less work than a sequence of maximum flows: on a single thread, PlanarCutter is already 4.1&times; faster than InertialFlowCutter (geometric mean over the 16 networks). And its rounds use many cores well, which matters most for the first cuts, where nothing else can run in parallel yet.</p>
+
+  <p>The number of rounds is the size of the separator, not the width of the map. At the top level of the road network of the USA, with 24 million vertices, the search takes 61 rounds and returns a separator of 61 vertices.</p>
+
+  <h3>Many candidates, one loop</h3>
+
+  <p>One pair of terminals gives one separator, and it may be lopsided. So, like the flow-based tools, PlanarCutter tries many <strong>candidates</strong>: on pieces with at least 10,000 vertices, eight directions times three terminal sizes, 24 in all. Each candidate needs its own BFS.</p>
+
+  <p>Run one after another, the 24 searches would take the sum of all their round counts, and after every round the threads have to synchronize. On the largest pieces, a million vertices or more, all candidates therefore advance in <strong>lockstep</strong>: round \(i\) of every candidate is a single parallel loop over (candidate, frontier vertex) pairs. Each candidate keeps its own visited marks, since a junction reached by one search may be untouched in another. The order PlanarCutter computes is the same for every thread count.</p>
+</section>
+
+<section id="bridges" data-toc="Bridges">
+  <h2><span class="num">06</span>Bridges break the trick</h2>
+
+  <p>Everything so far assumed that roads meet only at junctions. At a bridge or an underpass, two roads cross without meeting. In our 16 networks the number of such crossings is between 0.17% and 1.44% of the number of edges, and they matter more than that share suggests.</p>
+
+  <p>The obvious fix is to <strong>planarize</strong>: put a fake junction at every crossing. The lemma applies again, with the rule that a wall may not go through a fake junction, since it is not a real vertex that could be removed. But the fake junction connects two roads that are not connected in reality, and the wall then has to block a route that does not exist.</p>
+
+  <p>This costs most exactly where good cuts want to be. A good separator often runs along a highway, with the highway on one side and the local roads that pass under it on the other. Such underpasses cost a planarized wall extra vertices, and one cut can run past many of them.</p>
+
+  <h3>Tunnel, then repair</h3>
+
+  <p>A separator only has to make sure that no <em>edge</em> has its two ends on opposite sides. Where an edge is drawn is irrelevant. So a wall may cross a road in the middle, as long as both ends of that road finish on the same side.</p>
+
+  <p>PlanarCutter allows this for every edge involved in a crossing, that is, for both roads at a bridge. We call them <strong>tunnel edges</strong>. The faces are still those of the planarized drawing, but the wall may now pass straight through a piece of a tunnel edge, from the face on one side to the face on the other. Each passage is charged 1, like a vertex, so the search is still a plain BFS.</p>
+
+  <p>Afterwards a <strong>parity rule</strong> settles the bill. Count how many times the wall passed through each tunnel edge. Each passage flips which side of the wall you are on. An <em>even</em> count means both ends of the edge are on the same side: nothing to do. An <em>odd</em> count means the edge straddles the wall, and one of its endpoints is added to the separator to plug the leak. The charge of 1 per passage is an advance payment for that repair.</p>
+
+  <figure class="demo" id="demo-bridge">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>One highway, three underpasses</h3>
+      <p class="demo-hint">Choose how crossings are treated, then press Play: find the wall, count passages, repair, compare.</p>
+    </div>
+    <div class="demo-stage"><canvas aria-label="A map seen from above: a local road passes three times under a highway. Depending on how the crossings are treated, the separator has six, four or five vertices."></canvas></div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: var(--v-blue)"></span>terminal S</span>
+      <span><span class="sw" style="background: var(--v-orange)"></span>terminal T</span>
+      <span><span class="sw line" style="background: none; height: 0; border-top: 2px dashed var(--b-muted)"></span>tunnel edges: the highway and the three legs</span>
+      <span><span class="sw sq" style="background: var(--b-stage); box-shadow: inset 0 0 0 2px var(--b-ink); transform: rotate(45deg)"></span>fake junction (planarized)</span>
+      <span><span class="sw line" style="background: var(--v-red)"></span>wall, &times; where it passes through a road</span>
+      <span><span class="sw" style="background: var(--v-red)"></span>wall vertex</span>
+      <span><span class="sw" style="background: var(--v-pink)"></span>repair vertex</span>
+      <span><span class="sw" style="background: transparent; box-shadow: inset 0 0 0 2px var(--v-red)"></span>in the separator, but not needed</span>
+    </div>
+    <figcaption>The instance from our paper&rsquo;s figure, solved live. Planarized, the wall needs both ends of the highway: 6 vertices where the real network needs 4. With tunneling it passes through the highway twice (even, no repair) and reaches the optimal 4. The &ldquo;lower wall&rdquo; is forced under the highway to show the other case: three odd passages, repaired by their shared endpoint w, for 5. Several walls tie at BFS cost 6 here, and the figure takes the one with fewer vertices; another tie-break could return 5 or 6, and the refinement brings each of them to 4.</figcaption>
+  </figure>
+
+  <p>What we prove about this:</p>
+  <ul>
+    <li><strong>Valid.</strong> If every tunnel edge is drawn inside the outer boundary of the piece, the wall vertices plus the repair vertices separate <span class="k k-blue">S</span> from <span class="k k-orange">T</span>. Every candidate is additionally checked by an explicit connectivity test before it is scored.</li>
+    <li><strong>Bounded.</strong> The repaired separator is never larger than the cost the BFS charged for the wall. The charge is an upper bound: some passages end up costing a vertex and some cost nothing.</li>
+  </ul>
+
+  <p>Because of that, the wall with the lowest charge is not always the wall with the smallest separator. A local refinement, described in the next section, takes care of the difference.</p>
+
+  <p>How much does tunneling matter? On OpenStreetMap Europe, with tunneling and the refinement both switched off, the search space is 130% above InertialFlowCutter&rsquo;s. Tunneling alone brings the gap down to 3.3%.</p>
+</section>
+
+<section id="pipeline" data-toc="Pipeline">
+  <h2><span class="num">07</span>From one cut to a finished index</h2>
+
+  <p>Put together, finding one separator for one piece of the map looks like this:</p>
+
+  <ol>
+    <li><strong>Shrink the map</strong>, as InertialFlowCutter does. Dead-end trees are cut off, and every chain of vertices that only trace the shape of a road becomes a single edge. What remains is the <em>core graph</em>; each of its vertices remembers how many removed vertices it stands for, so that balance is still measured on the real network.</li>
+    <li><strong>Pick candidates.</strong> For each direction and fraction, take the geometric terminals of Inertial Flow.</li>
+    <li><strong>Run the wall BFS</strong> for all candidates, in lockstep on the largest pieces, tunneling through crossing edges.</li>
+    <li><strong>Repair</strong> every wall by the parity rule.</li>
+    <li><strong>Score</strong> each result by its expansion, after verifying by a connectivity check that it separates its terminals. In our experiments every wall passed this check.</li>
+    <li><strong>Refine</strong> the best few. In a narrow band of vertices around the wall, compute an exact minimum vertex cut by maximum flow on the real network, without fake junctions, and keep it if it is smaller.</li>
+    <li><strong>Recurse</strong> on the parts, in parallel.</li>
+  </ol>
+
+  <p>Maximum flow is still part of the method, as a local refinement inside a thin strip around the wall, where augmenting paths are short. On the USA network with one thread it takes about 10% of the ordering time.</p>
+
+  <h3>The second bottleneck: building the index</h3>
+
+  <p>Once ordering takes under a minute, stage 2 matters. RoutingKit, the implementation all baselines here use, builds the index sequentially, and on Europe that takes about a minute.</p>
+
+  <p>Building means computing, for every vertex, its list of <em>upward neighbors</em>: the neighbors of higher rank, shortcuts included. RoutingKit goes through the vertices in rank order: it completes the list of a vertex, finds the parent (the lowest entry), and merges the rest into the parent&rsquo;s list. That is the contraction rule again.</p>
+
+  <p>So the list of a vertex is complete as soon as all its children in the elimination tree are done, and different subtrees are independent. We process the tree from the leaves upward with many threads. The tree is only discovered along the way, so a vertex cannot count its children. Instead it counts its roads to lower-ranked vertices that have not been handed up to it yet. Roads are handed up along the tree: in the eight-junction town, A&rsquo;s road to H travels inside the lists of E and then G, and reaches H when G is done. A counter reaches zero exactly when the last child is done, and the thread that brings it to zero continues with that vertex straight away.</p>
+
+  <p>There are no global rounds here, on purpose. In the wall BFS a round is the natural unit, because the whole frontier is ready at the same moment. In the tree, subtrees finish at very different times, and with this scheme no thread waits for another.</p>
+
+  <figure class="demo" id="demo-build">
+    <div class="demo-head">
+      <span class="demo-tag">Interactive</span>
+      <h3>Build the index in any order you like</h3>
+      <p class="demo-hint">Click or tap any vertex with a green ring to finish it (keyboard: arrow keys, then Enter), or press Play for a random schedule. You play the threads.</p>
+    </div>
+    <div class="demo-split">
+      <div class="demo-stage"><span class="demo-pane-label">Town and shortcuts</span><canvas class="clickable" aria-label="The eight-junction town. Shortcuts appear as vertices are finished."></canvas></div>
+      <div class="demo-stage"><span class="demo-pane-label">Elimination tree</span><canvas class="clickable" aria-label="The elimination tree of the town. A vertex becomes ready when all its children are finished; select a ready vertex to finish it."></canvas></div>
+    </div>
+    <div class="demo-controls"></div>
+    <p class="demo-status"></p>
+    <div class="demo-readout"></div>
+    <div class="demo-legend">
+      <span><span class="sw" style="background: transparent; box-shadow: inset 0 0 0 2px var(--v-green)"></span>ready: all children are done</span>
+      <span><span class="sw" style="background: var(--v-green)"></span>finished</span>
+      <span><span class="sw" style="background: transparent; box-shadow: inset 0 0 0 2px var(--v-gray)"></span>waiting, with the number of roads not handed up yet</span>
+      <span><span class="sw line" style="background: none; height: 0; border-top: 2px dashed var(--b-text)"></span>shortcut</span>
+      <span>&uarr; list of upward neighbors</span>
+    </div>
+    <figcaption>The eight-junction town from <a href="#nested-dissection">section 3</a> and its elimination tree. A, B, C and D depend on nothing and can all start at once, and the two subtrees under G never wait for each other. However the work is interleaved, the index comes out the same, with 9 roads and 4 shortcuts.</figcaption>
+  </figure>
+
+  <p>With 112 threads, our build is 14.5&times; faster than RoutingKit&rsquo;s sequential build (geometric mean over all 16 networks), and it produces exactly the same index: we confirmed this bit for bit on 13 of the networks.</p>
+</section>
+
+<section id="results" data-toc="Results">
+  <h2><span class="num">08</span>Results</h2>
+
+  <p>We evaluate PlanarCutter on 16 road networks, from New York (0.26 million vertices) to the whole planet (315 million vertices, 391 million edges), on a machine with 112 cores (224 hyperthreads, two hardware threads per core). All parallel methods use 112 threads. InertialFlowCutter runs in its default configuration with 8 geometric cutters, and ordering times exclude file loading for every method. All baselines build the index with RoutingKit.</p>
+
+  <div class="table-scroll wide nowrap" data-reveal>
+    <table>
+      <thead>
+        <tr><th>OSM Europe, 100M vertices</th><th class="num">Order [s]</th><th class="num">Build [s]</th><th class="num">Order + build [s]</th><th class="num">Query [&micro;s]</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>No index (Dijkstra)</td><td class="num">&ndash;</td><td class="num">&ndash;</td><td class="num">&ndash;</td><td class="num">8.56&nbsp;s</td></tr>
+        <tr><td>KaHIP (fast, sequential)</td><td class="num">349</td><td class="num">106</td><td class="num">455</td><td class="num">2250</td></tr>
+        <tr><td>ParMETIS</td><td class="num">82.0</td><td class="num">60.2</td><td class="num">142</td><td class="num">1480</td></tr>
+        <tr><td>FlowCutter, 3 cutters</td><td class="num">2743</td><td class="num">64.0</td><td class="num">2807</td><td class="num">408</td></tr>
+        <tr><td>FlowCutter, 20 cutters</td><td class="num">3474</td><td class="num">63.5</td><td class="num">3538</td><td class="num">372</td></tr>
+        <tr><td>Inertial Flow</td><td class="num">936</td><td class="num">63.2</td><td class="num">1000</td><td class="num">435</td></tr>
+        <tr><td>InertialFlowCutter</td><td class="num">1091</td><td class="num">63.6</td><td class="num">1154</td><td class="num">354</td></tr>
+        <tr class="ours"><td>PlanarCutter</td><td class="num">55.0</td><td class="num">3.22</td><td class="num">58.2</td><td class="num">346</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="pc-note">112 threads for every method except KaHIP, which is sequential. A cutter is one pair of terminals that FlowCutter grows. Queries are sequential, averaged over 10<sup>6</sup> random pairs. The totals are rounded from unrounded times. Source: the overview table of our paper.</p>
+
+  <p>General-purpose partitioners order quickly, and their queries are slower. Flow-based road partitioners give fast queries and take longer to order. PlanarCutter orders faster than both groups on this network, and its queries are as fast as with InertialFlowCutter.</p>
+
+  <div class="stats" data-reveal>
+    <div class="stat"><span class="stat-num">8.8&times;</span><span class="stat-label">faster ordering than IFC on the ten networks above 10 million vertices (6.7&times; over all 16); geometric means, 112 threads for both</span></div>
+    <div class="stat"><span class="stat-num">9.6&times;</span><span class="stat-label">faster order + build than IFC with RoutingKit on the same ten networks (7.4&times; over all 16), 112 threads</span></div>
+    <div class="stat"><span class="stat-num">20&ndash;37&times;</span><span class="stat-label">self-speedup of our ordering on 112 threads, on the nine networks of the scaling study</span></div>
+    <div class="stat"><span class="stat-num">3.1 min</span><span class="stat-label">order + build for the planet (315 million vertices) on 112 cores; 29.3 min with IFC + RoutingKit</span></div>
+  </div>
+
+  <p>Self-speedup is a program&rsquo;s own one-thread time divided by its 112-thread time. InertialFlowCutter is parallel too and reaches 10&times; to 22&times; on the same networks; Inertial Flow reaches 1.7&times; to 3.4&times;.</p>
+
+  <h3>Is the index as good?</h3>
+
+  <p>Measured by search space, the indexes built from PlanarCutter&rsquo;s orders are 2.2% smaller than those from IFC&rsquo;s in the geometric mean over all 16 networks. They are smaller on 12 networks, and the largest difference the other way is 3.2%. Query times follow: they are within a few percent of IFC&rsquo;s, inside the run-to-run variation of the measurement, which is up to 5.8%. In short: <strong>the same query speed</strong>, from an order that is computed several times faster.</p>
+
+  <p class="callout"><span class="callout-label">Scope</span>PlanarCutter is designed for road networks: it relies on vertex coordinates and on a drawing that is nearly planar.</p>
+</section>
+
+<section id="recap" data-toc="Recap">
+  <h2><span class="num">09</span>Recap</h2>
+
+  <ol>
+    <li>A route-planning index is only as good as the order it is built from, and a good order comes from small, balanced separators found recursively.</li>
+    <li>On a plane graph, the smallest separator between two terminals is a shortest path through the faces, from one free side of the boundary to the other. A breadth-first search finds it in as many rounds as the separator has vertices.</li>
+    <li>A round is a parallel loop over the frontier, while augmenting paths form a chain. That is why the method keeps scaling on a large machine, especially for the first cuts, where nothing else can run in parallel yet.</li>
+    <li>Real road networks have crossings. Let the wall tunnel through the crossing edges, charge each passage, and afterwards repair exactly the edges that were passed an odd number of times.</li>
+    <li>When one stage gets fast, the next one becomes the bottleneck. The index build is parallelized by following the elimination tree instead of the global order.</li>
+  </ol>
+
+  <p>Together these bring the preprocessing of a continental road network from about twenty minutes to about one, on 112 cores, with queries as fast as before.</p>
+
+  <h3>References</h3>
+  <ul class="pc-refs">
+    <li>Dibbelt, Strasser, Wagner. Customizable Contraction Hierarchies. 2016.</li>
+    <li>Schild, Sommer. On Balanced Separators in Road Networks (Inertial Flow). 2015.</li>
+    <li>Hamann, Strasser. Graph Bisection with Pareto Optimization (FlowCutter). 2018.</li>
+    <li>Gottesb&uuml;ren, Hamann, Uhl, Wagner. Faster and Better Nested Dissection Orders for Customizable Contraction Hierarchies (InertialFlowCutter). 2019.</li>
+    <li>Sanders, Schulz. Think Locally, Act Globally (KaHIP). 2013. Karypis, Kumar. A Parallel Algorithm for Multilevel Graph Partitioning and Sparse Matrix Ordering (ParMETIS). 1998.</li>
+    <li>Strasser. <a href="https://github.com/RoutingKit/RoutingKit" target="_blank" rel="noopener">RoutingKit</a>.</li>
+    <li>Itai, Shiloach. Maximum Flow in Planar Networks. 1979. Hassin. Maximum Flow in (s,t) Planar Networks. 1981. Miller. Finding Small Simple Cycle Separators for 2-Connected Planar Graphs. 1986.</li>
+  </ul>
+</section>

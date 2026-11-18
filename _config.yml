@@ -226,6 +226,9 @@ collections:
   talks:
     output: true
     permalink: /:collection/:path/
+  blog:
+    output: true
+    permalink: /blog/:path/
 
 
 # These settings control how pages and collections are included in the site
@@ -283,6 +286,14 @@ defaults:
       layout: talk
       author_profile: true
       share: true
+  # _blog (interactive research posts, see _layouts/blog-post.html)
+  - scope:
+      path: ""
+      type: blog
+    values:
+      layout: blog-post
+      author_profile: false
+      sitemap: true
 
 
 # Sass/SCSS
