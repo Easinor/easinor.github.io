@@ -24,7 +24,20 @@ window.DOLL = window.DOLL || {};
       drank: ['All full', 'Nice and cool~', 'Tasty'],
       playedOut: ['Tired… a snack, maybe', 'Hungry, and thirsty too', 'Break time. Dinner?'],
       bird: ['A little bird…', 'Ek-ek-ek…', 'I want it', "Don't fly away"],
-      squirrel: ['A squirrel…', "What's it eating?", 'Such a big tail…', 'Ek-ek…']
+      squirrel: ['A squirrel…', "What's it eating?", 'Such a big tail…', 'Ek-ek…'],
+      sun: ['Warm…', 'A sunny spot', 'Mmm, sunshine'],
+      bed: ['My bed', 'So soft…', 'Nap time'],
+      box: ['A box.', 'If I fits, I sits', 'Mine now'],
+      boo: ['…Boo.', 'You found me', 'Hm?'],
+      treat: ['A treat?', 'For me?', 'Fish biscuit…'],
+      yum: ['Tasty', 'Thank you', 'Crunch crunch'],
+      full: ["I'm full, thank you", 'No more for me'],
+      missed: ['Oh… gone', 'Too slow'],
+      come: ['Coming', 'Yes?', 'You called?'],
+      boop: ['…', 'Mrrp?', 'My nose!'],
+      cheer: ['Well done', 'You did it', 'Good work today'],
+      focus: ["I'll keep quiet", 'Focus time', 'Go on, I am here'],
+      breakOver: ['Back to work?', 'Break is over', 'One more round?']
     },
     nova: {
       wantpet: ['Pet me now!', 'Belly rubs!', 'Hand! Hand!', 'Rub rub rub'],
@@ -42,7 +55,20 @@ window.DOLL = window.DOLL || {};
       drank: ['Glug glug~', 'All done!', 'Hehe, yummy'],
       playedOut: ['Hungry now! Dinner!', 'Thirsty from running!', 'Wiped out… food first!'],
       bird: ['Bird! Bird!', 'Ek-ek-ek-ek!', 'Let me out!', 'It looked at me!'],
-      squirrel: ['Squirrel!!', 'That tail! Want it!', 'Share one with me!', 'Ek-ek-ek-ek!']
+      squirrel: ['Squirrel!!', 'That tail! Want it!', 'Share one with me!', 'Ek-ek-ek-ek!'],
+      sun: ['Sunny spot!', 'So warm~', 'Toasty!'],
+      bed: ['Bed! Bed!', 'Comfy~', 'Sleepy now…'],
+      box: ['BOX!', 'I fit! I fit!', 'Best box ever!'],
+      boo: ['BOO!', 'Surprise!!', 'Hehe, got you!'],
+      treat: ['TREAT!', 'Gimme gimme!', 'Throw it! Throw it!'],
+      yum: ['Yum!!', 'More! More!', 'Crunchy!'],
+      full: ['So full… burp', 'Tummy is full!'],
+      missed: ['Hey! Mine!', 'Aww…'],
+      come: ['Coming!!', 'Here I am!', 'What? What?'],
+      boop: ['Boop!', 'Hehe!', 'Achoo!'],
+      cheer: ['Yay!! You did it!', 'Tomato get!', 'Play time!!'],
+      focus: ["Shh… I'll be good", 'You can do it!', 'Focus! Focus!'],
+      breakOver: ['Aww, already?', 'Back to work!', 'Go go go!']
     }
   };
   AI.line = function (G, key) {
@@ -52,7 +78,13 @@ window.DOLL = window.DOLL || {};
 
   // 两只猫同时在屋里：数值按各自的猫取；说话时带上是哪只猫，气泡就画在那只头上
   const cs = (G) => St.data[G.catId] || St.cur();
-  const say = (G, text, opt) => FX.say(text, Object.assign({ cat: G.catId }, opt || {}));
+  // 番茄钟专注的时候猫不主动出声：只有你刚动过手（点了屋里的东西、用了底下的工具）之后的十来秒里才回应
+  const QUIET_AFTER = 12000;
+  const say = (G, text, opt) => {
+    const Gm = D.Game;
+    if (Gm && Gm.focusMode && performance.now() - (Gm.userActAt == null ? -1e9 : Gm.userActAt) > QUIET_AFTER) return;
+    FX.say(text, Object.assign({ cat: G.catId }, opt || {}));
+  };
 
   // ---------- 高处：三层猫爬架顶、窗台 ----------
   // 每个高处是一串跳点：从地上一层一层跳上去，下来时倒着跳回地面
@@ -132,7 +164,8 @@ window.DOLL = window.DOLL || {};
 
   B.sit = { spr: 'sit', dur: [5, 11] };
   B.loaf = { spr: 'loaf', dur: [8, 18] };
-  B.stretch = { spr: 'stretch', dur: [1.6, 2.4] };
+  // 伸懒腰：前半身压低、屁股翘高，眯着眼
+  B.stretch = { spr: 'stretch', dur: [1.8, 2.6] };
 
   B.gaze = {
     spr: 'sit', dur: [7, 16], look: 'up',
@@ -868,7 +901,9 @@ window.DOLL = window.DOLL || {};
     spr: 'stand', dur: [12, 20], walking: true,
     enter(G) {
       const toys = (D.Game && D.Game.toys) || [];
-      G.toy = toys.length ? U.pick(toys) : null;
+      // 你把哪个玩具拨了一下，猫就去追哪个；不然自己随便挑一个
+      G.toy = G.toyWant && toys.indexOf(G.toyWant) >= 0 ? G.toyWant : (toys.length ? U.pick(toys) : null);
+      G.toyWant = null;
       if (!G.toy) { G.behDone = true; return; }
       G.playPhase = 'go';
     },
@@ -990,6 +1025,357 @@ window.DOLL = window.DOLL || {};
       c.mood = U.clamp(c.mood + 1.2 * dt, 0, 100);
     },
     exit(G) { G.forceHappy = false; }
+  };
+
+  // ---------- 窝：左下角的猫窝、右下角的纸箱 ----------
+  // 两个窝都在猫平时走不到的最前面：走到旁边 → 跳进去。在里面的时候 G.inBed / G.inBox 是 true，
+  // 位置由行为自己钉住（hopping 一直是 true，主循环就不会把它拉回地板那一排）。
+  // 要去做别的事（开饭了、被叫走、时间到了）时由 AI.start 先插一段「跳出来」（nestOut）。
+  function nestFree(G, name) { return !otherCats(G).some(o => o.nest === name); }
+  function nestGo(G, dt, to) {
+    const d = G.walkTo - G.x;
+    if (!arrived(G, d, 1.5)) { G.spr = 'stand'; step(G, Math.sign(d) * Math.min(Math.abs(d), 24 * dt), 'walk'); return false; }
+    G.hops = [to]; G.hopFrom = null; G.hopping = true;
+    return true;
+  }
+  function nestExit(G) {
+    if (G.inBed || G.inBox) return;       // 还在窝里：留给 nestOut 跳出来
+    G.hopping = false; G.nest = null; G.sink = 0;
+  }
+  const zzz = (G, dx, dy, dt, gap) => {
+    G.zzzT = (G.zzzT || 0) - dt;
+    if (G.zzzT <= 0) {
+      G.zzzT = U.rnd(gap, gap + 1);
+      FX.spawn('zzz', G.x + dx, G.y + dy, { vy: -5, vx: 2 * G.facing, g: -0.6, life: 2.4 });
+    }
+  };
+
+  // 去猫窝睡觉：跳进去先踩一会儿奶，再团起来睡
+  B.bedNap = {
+    spr: 'stand', dur: [70, 130], walking: true,
+    enter(G) {
+      const bed = G.L.bed;
+      if (!bed || !(D.Game && D.Game.showScene) || !nestFree(G, 'bed')) { G.behDone = true; return; }
+      G.nest = 'bed'; G.nestPhase = 'go';
+      G.walkTo = U.clamp(bed.x + 30, 16, G.L.W - 16);
+      G.goY = AI.floorMax(G.L);
+    },
+    update(G, dt) {
+      const bed = G.L.bed;
+      if (!G.nest) { G.behDone = true; return; }
+      if (G.nestPhase === 'go') {
+        if (nestGo(G, dt, { x: bed.x, y: bed.y - 5 })) G.nestPhase = 'in';
+      } else if (G.nestPhase === 'in') {
+        if (hop(G, dt)) {
+          G.inBed = true; G.nestPhase = 'knead'; G.kneadT = U.rnd(2.5, 4.5); G.facing = 1;
+          say(G, AI.line(G, 'bed'), { dur: 2.2 });
+        }
+      } else {
+        G.x = bed.x; G.y = bed.y - 5; G.walking = false;
+        if (G.nestPhase === 'knead') {
+          G.spr = 'knead'; G.forceHappy = true;
+          G.kneadT -= dt;
+          if (G.kneadT <= 0) { G.nestPhase = 'sleep'; G.forceHappy = false; }
+        } else {
+          G.spr = 'sleep';
+          const c = cs(G);
+          c.energy = U.clamp(c.energy + 0.7 * dt, 0, 100);      // 在窝里睡得更香
+          c.mood = U.clamp(c.mood + 0.1 * dt, 0, 100);
+          zzz(G, 12, -14, dt, 1.4);
+        }
+      }
+    },
+    exit(G) { G.forceHappy = false; nestExit(G); }
+  };
+
+  // 钻纸箱：跳进去，要么缩在里面只露出耳朵尖、探出眼睛偷看、再猛地冒出来；要么就窝在里面打盹。
+  // boxDrop = 身子往箱子里沉了多少格（负的是坐高了）
+  const BOX_DROP = { up: -5, peek: 4, hide: 9, nap: 2 };
+  B.box = {
+    spr: 'stand', dur: [34, 64], walking: true,
+    enter(G) {
+      const box = G.L.box;
+      if (!box || !(D.Game && D.Game.showScene) || !nestFree(G, 'box')) { G.behDone = true; return; }
+      G.nest = 'box'; G.nestPhase = 'go';
+      G.boxMode = G.boxWant || (U.chance(.4) ? 'nap' : 'play'); G.boxWant = null;
+      if (G.boxMode === 'nap') G.beh.dur = U.rnd(60, 110);
+      G.walkTo = U.clamp(box.x - 32, 16, G.L.W - 16);
+      G.goY = AI.floorMax(G.L);
+    },
+    update(G, dt) {
+      const box = G.L.box;
+      if (!G.nest) { G.behDone = true; return; }
+      if (G.nestPhase === 'go') {
+        if (nestGo(G, dt, { x: box.x, y: box.y - 6 })) G.nestPhase = 'in';
+        return;
+      }
+      if (G.nestPhase === 'in') {
+        if (!hop(G, dt)) return;
+        G.inBox = true; G.nestPhase = 'sit'; G.facing = 1;
+        G.boxDrop = BOX_DROP.up; G.boxPose = 'up'; G.boxT = 1.6;
+        say(G, AI.line(G, 'box'), { dur: 2.2 });
+        D.Game.boxWob = 0.35;
+      }
+      // 在箱子里
+      G.walking = false; G.spr = 'sit';
+      G.boxT -= dt;
+      if (G.boxMode === 'nap') {
+        if (G.boxT <= 0 && G.boxPose !== 'nap') G.boxPose = 'nap';
+        if (G.boxPose === 'nap') {
+          const c = cs(G);
+          c.energy = U.clamp(c.energy + 0.6 * dt, 0, 100);
+          zzz(G, 8, -22 + G.boxDrop, dt, 1.6);
+        }
+      } else if (G.boxT <= 0) {
+        // 藏 → 偷看 → 冒出来 → 藏…
+        if (G.boxPose === 'up') { G.boxPose = 'hide'; G.boxT = U.rnd(1.5, 3); }
+        else if (G.boxPose === 'hide') { G.boxPose = 'peek'; G.boxT = U.rnd(2.5, 4.5); G.facing = U.chance(.5) ? 1 : -1; }
+        else { G.boxPose = 'up'; G.boxT = U.rnd(2, 3.2); G.pounce = 0.3; D.Game.boxWob = 0.3; if (U.chance(.5)) say(G, AI.line(G, 'boo'), { dur: 1.6 }); }
+      }
+      const to = BOX_DROP[G.boxPose];
+      G.boxDrop += U.clamp(to - G.boxDrop, -38 * dt, 38 * dt);
+      G.x = box.x; G.y = box.y - 1 + Math.round(G.boxDrop);
+      G.sink = Math.max(0, Math.round(G.boxDrop));
+    },
+    exit(G) { nestExit(G); }
+  };
+  // 点了一下纸箱：里面的猫被吓一跳 / 冒出来（main.js 调）。返回里面有没有猫
+  AI.pokeBox = function () {
+    const cat = (D.Game.cats || []).find(c => c.inBox);
+    D.Game.boxWob = 0.4;
+    if (!cat) return null;
+    const wasNap = cat.boxPose === 'nap';
+    cat.boxMode = 'play'; cat.boxPose = 'up'; cat.boxT = 2.6; cat.pounce = 0.3;
+    if (cat.beh && cat.beh.name === 'box') cat.beh.dur = Math.max(cat.beh.dur, cat.beh.t + 14);
+    say(cat, wasNap ? U.pick(['…Hm?', 'Mm… what?']) : AI.line(cat, 'boo'), { dur: 1.8 });
+    FX.spawn('sparkle', cat.x, cat.y - 26, { n: 5, spread: 8, life: .8 });
+    return cat;
+  };
+
+  // 从窝里跳出来，再接着做原本要做的事
+  B.nestOut = {
+    spr: 'stand', dur: [10, 10], walking: true,
+    enter(G) {
+      const L = G.L, bed = G.inBed;
+      const to = bed ? { x: U.clamp(L.bed.x + 34, 16, L.W - 16), y: AI.floorMax(L) }
+        : { x: U.clamp(L.box.x - 34, 16, L.W - 16), y: AI.floorMax(L) };
+      G.inBed = false; G.inBox = false; G.sink = 0;
+      G.hops = [to]; G.hopFrom = null; G.hopping = true;
+    },
+    update(G, dt) {
+      if (hop(G, dt)) {
+        G.hopping = false; G.nest = null;
+        G.y = G.gy;
+        const next = G.afterHop; G.afterHop = null;
+        if (next) AI.start(G, next); else G.behDone = true;
+      }
+    },
+    exit(G) { G.hopping = false; G.nest = null; }
+  };
+
+  // 晒太阳：白天窗户照进来的那片光落在地板上，走过去趴着 / 翻着肚皮 / 睡一觉
+  B.sunbathe = {
+    spr: 'stand', dur: [28, 56], walking: true,
+    enter(G) {
+      const sp = D.Scene.sunSpot(G.L);
+      if (!sp || otherCats(G).some(o => o.beh && o.beh.name === 'sunbathe')) { G.behDone = true; return; }
+      G.sunPhase = 'go';
+      G.walkTo = U.clamp(sp.x + U.rnd(-6, 6), 34, G.L.W - 34);
+      G.goY = AI.clampY(G.L, sp.y);
+    },
+    update(G, dt) {
+      if (G.sunPhase === 'go') {
+        const d = G.walkTo - G.x;
+        if (arrived(G, d, 1.5)) {
+          G.sunPhase = 'bask'; G.walking = false;
+          G.sunSpr = U.pick(['loaf', 'belly', 'sleep', 'loaf']);
+          G.facing = U.chance(.5) ? 1 : -1;
+          say(G, AI.line(G, 'sun'), { dur: 2.4 });
+          return;
+        }
+        G.spr = 'stand';
+        step(G, Math.sign(d) * Math.min(Math.abs(d), 22 * dt), 'walk');
+        return;
+      }
+      G.walking = false; G.spr = G.sunSpr;
+      G.forceHappy = G.sunSpr !== 'sleep';
+      const c = cs(G);
+      c.mood = U.clamp(c.mood + 0.6 * dt, 0, 100);
+      c.energy = U.clamp(c.energy + 0.3 * dt, 0, 100);
+      if (G.sunSpr === 'sleep') zzz(G, 9 * G.facing, -14, dt, 1.6);
+      else if (U.chance(dt * 0.5)) FX.spawn('sparkle', G.x + U.rnd(-14, 14), G.y - U.rnd(6, 20), { vy: -4, g: 0, life: 1, color: '#FFE9A0' });
+      // 太阳挪走了（或者天黑了）：不晒了
+      const sp = D.Scene.sunSpot(G.L);
+      if (!sp || Math.abs(sp.x - G.x) > 46) G.behDone = true;
+    },
+    exit(G) { G.forceHappy = false; }
+  };
+
+  // 被叫过来：你用手点一下地板，猫就小跑过来坐下，仰头等摸
+  B.come = {
+    spr: 'stand', dur: [14, 14], walking: true,
+    enter(G) {
+      const to = G.comeTo || { x: G.x, y: G.gy };
+      G.walkTo = U.clamp(to.x, 16, G.L.W - 16);
+      G.goY = AI.clampY(G.L, to.y);
+      G.comePhase = 'go';
+      if (U.chance(.6)) say(G, AI.line(G, 'come'), { dur: 1.6 });
+    },
+    update(G, dt) {
+      if (G.comePhase === 'go') {
+        const d = G.walkTo - G.x;
+        if (arrived(G, d, 2)) { G.comePhase = 'sit'; G.comeT = U.rnd(3, 4.5); G.walking = false; return; }
+        G.spr = 'stand';
+        step(G, Math.sign(d) * Math.min(Math.abs(d), 46 * dt), 'run');
+        return;
+      }
+      G.walking = false; G.spr = 'sit';
+      G.comeT -= dt;
+      if (G.comeT <= 0 && G.petStroke <= 0) G.behDone = true;
+    }
+  };
+
+  // ---------- 零食 ----------
+  // 拿着零食的时候：猫用后腿站起来讨（零食凑近了还会招手）；零食扔到地上，离得近的那只跑过去吃掉。
+  // 一只猫连着吃 4 块就饱了，过一阵才会再吃
+  AI.treatFull = (G) => (G.treatN || 0) >= 4;
+  B.beg = {
+    spr: 'sit', dur: [999, 999],
+    enter(G) { G.begT = 0.6; },
+    update(G, dt) {
+      const Gm = D.Game;
+      if (Gm.G.tool !== 'treat' || AI.treatFull(G)) { G.behDone = true; return; }
+      const m = Gm.G.mouse, dx = m.x - G.x;
+      if (Math.abs(dx) > 6) G.facing = Math.sign(dx);
+      const near = Gm.G.mouseIn && Math.abs(dx) < 46 && m.y < G.y - 8 && m.y > G.y - 70;
+      G.spr = near ? 'rear' : 'sit';
+      G.wave = near;
+      G.begT -= dt;
+      if (G.begT <= 0) { G.begT = U.rnd(4, 7); say(G, AI.line(G, 'treat'), { dur: 1.8 }); }
+    },
+    exit(G) { G.wave = false; }
+  };
+  B.goTreat = {
+    spr: 'stand', dur: [14, 14], walking: true,
+    enter(G) { G.treatPhase = 'go'; },
+    update(G, dt) {
+      const Gm = D.Game, tr = G.treat;
+      if (G.treatPhase === 'eat') {
+        G.walking = false; G.spr = 'eat';
+        G.eatT -= dt;
+        if (U.chance(dt * 7)) FX.spawn('crumb', G.x + 14 * G.facing, G.y - 3, { vy: -8, g: 36, life: .5 });
+        if (G.eatT <= 0) {
+          G.treatN = (G.treatN || 0) + 1;
+          cs(G).mood = U.clamp(cs(G).mood + 5, 0, 100);
+          FX.spawn('heart', G.x, G.y - 26, { vy: -9, g: 0.8, life: 1.4 });
+          say(G, AI.line(G, AI.treatFull(G) ? 'full' : 'yum'), { dur: 1.8 });
+          St.addBond();
+          // 你手里还拿着零食：吃完接着讨
+          if (Gm.G.tool === 'treat' && !AI.treatFull(G)) { AI.start(G, 'beg'); return; }
+          G.behDone = true;
+        }
+        return;
+      }
+      // 零食被另一只抢先吃掉了
+      if (!tr || Gm.treats.indexOf(tr) < 0 || (tr.by && tr.by !== G.catId)) {
+        if (tr) say(G, AI.line(G, 'missed'), { dur: 1.6 });
+        if (Gm.G.tool === 'treat' && !AI.treatFull(G)) { AI.start(G, 'beg'); return; }
+        G.behDone = true; return;
+      }
+      const side = G.x <= tr.x ? -1 : 1;
+      const d = tr.x + side * 13 - G.x;
+      G.goY = AI.clampY(G.L, tr.y);
+      if (tr.z <= 0.5 && arrived(G, d, 2)) {
+        tr.by = G.catId;                               // 我的了
+        Gm.treats.splice(Gm.treats.indexOf(tr), 1);
+        G.treatPhase = 'eat'; G.eatT = 1.3; G.facing = -side; G.spr = 'eat';
+        return;
+      }
+      G.spr = 'stand';
+      step(G, Math.sign(d) * Math.min(Math.abs(d), 66 * dt), 'run');
+    },
+    exit(G) { G.treat = null; }
+  };
+  // 地上有零食：让有空的猫去追（main.js 每帧调）。每块零食找离它最近、还没在追别的零食的那只
+  const TREAT_OK = { sit: 1, loaf: 1, wander: 1, groom: 1, gaze: 1, stretch: 1, play: 1, beg: 1, wantpet: 1, come: 1, zoomies: 1, sunbathe: 1, refuel: 1, bellyUp: 1 };
+  AI.treatTick = function (dt) {
+    const Gm = D.Game;
+    for (const cat of Gm.cats) {
+      // 饱了以后慢慢消化：40 秒少一块
+      if (cat.treatN > 0) { cat.treatDig = (cat.treatDig || 0) + dt; if (cat.treatDig > 40) { cat.treatDig = 0; cat.treatN--; } }
+    }
+    for (const tr of Gm.treats) {
+      if (tr.z > 0.5 || Gm.cats.some(c => c.treat === tr)) continue;
+      // 闲着的都算：在爬架 / 窗台上的会跳下来，躲在纸箱里玩的也会钻出来（睡着的不叫）
+      const cand = Gm.cats.filter(c => !c.treat && c.beh && !AI.treatFull(c) && !(c === Gm.G && Gm.G.paused) &&
+        ((TREAT_OK[c.beh.name] && !c.hopping) || (c.beh.name === 'box' && c.inBox && c.boxPose !== 'nap')));
+      if (!cand.length) continue;
+      cand.sort((a, b) => Math.abs(a.x - tr.x) - Math.abs(b.x - tr.x));
+      cand[0].treat = tr;
+      AI.start(cand[0], 'goTreat');
+      cand[0].treat = tr;                              // start() 里上一个行为的 exit 可能把它清掉
+    }
+  };
+
+  // 庆祝（番茄钟专注完成）：站起来招手、蹦两下
+  B.cheer = {
+    spr: 'rear', dur: [3.2, 3.2],
+    enter(G) { G.wave = true; G.cheerT = 0; },
+    update(G, dt) {
+      G.spr = 'rear'; G.wave = true; G.forceHappy = true;
+      G.cheerT -= dt;
+      if (G.cheerT <= 0) {
+        G.cheerT = 0.7; G.pounce = 0.4;
+        FX.spawn('sparkle', G.x + U.rnd(-10, 10), G.y - 30, { n: 2, spread: 6, life: .8 });
+      }
+    },
+    exit(G) { G.wave = false; G.forceHappy = false; }
+  };
+
+  // ---------- 你追我跑 ----------
+  // 一只在前面满屋子跑，另一只在后面追；跑完三趟，追的那只扑上去「抓到了」
+  B.tagLead = {
+    spr: 'stand', dur: [14, 14], walking: true,
+    enter(G) { G.zoomLegs = 0; G.goY = AI.randFloorY(G.L); G.walkTo = G.x < G.L.W / 2 ? G.L.W - 20 : 20; },
+    update(G, dt) {
+      const o = G.tagWith;
+      if (!o || !o.beh || o.beh.name !== 'tagFollow') { G.behDone = true; return; }
+      const d = G.walkTo - G.x;
+      if (Math.abs(d) < 3) {
+        G.zoomLegs++;
+        if (G.zoomLegs >= 3) { G.behDone = true; return; }
+        G.walkTo = G.walkTo < G.L.W / 2 ? G.L.W - 20 : 20;
+        G.goY = AI.randFloorY(G.L);
+      }
+      step(G, Math.sign(d) * Math.min(Math.abs(d), 74 * dt), 'run');
+      cs(G).energy = U.clamp(cs(G).energy - 1.8 * dt, 0, 100);
+      cs(G).mood = U.clamp(cs(G).mood + 0.6 * dt, 0, 100);
+      if (U.chance(dt * 6)) FX.spawn('dust', G.x - 6 * G.facing, G.y - 1, { vy: -3, vx: -8 * G.facing, g: 2, life: .5 });
+    },
+    exit(G) { G.tagWith = null; }
+  };
+  B.tagFollow = {
+    spr: 'stand', dur: [16, 16], walking: true,
+    enter(G) { say(G, U.pick(G.catId === 'nova' ? ['Tag! You are it!', 'Catch you!', 'Wait for me!'] : ['…Fine. Run.', 'I will catch you']), { dur: 1.6 }); },
+    update(G, dt) {
+      const o = G.tagWith;
+      if (!o || !o.beh || o.beh.name !== 'tagLead') {
+        // 前面那只停下了：扑上去
+        if (o && !G.tagEnd) {
+          G.tagEnd = true; G.pounce = 0.4;
+          say(G, U.pick(['Got you!', 'Caught!', 'Hehe!']), { dur: 1.6 });
+          FX.spawn('heart', (G.x + o.x) / 2, G.y - 28, { vy: -9, g: 0.8, life: 1.4 });
+        }
+        G.behDone = true; return;
+      }
+      const tx = o.x - o.facing * 30, d = tx - G.x;
+      G.goY = o.gy;
+      if (Math.abs(d) > 3) step(G, Math.sign(d) * Math.min(Math.abs(d), 70 * dt), 'run');
+      else { G.gait = 'run'; G.gaitHold = 0.15; G.facing = o.facing; }
+      cs(G).energy = U.clamp(cs(G).energy - 1.8 * dt, 0, 100);
+      cs(G).mood = U.clamp(cs(G).mood + 0.6 * dt, 0, 100);
+    },
+    exit(G) { G.tagWith = null; G.tagEnd = false; }
   };
 
   // ---------- 两只猫一起做的事 ----------
@@ -1124,7 +1510,7 @@ window.DOLL = window.DOLL || {};
     if (!(D.Game && D.Game.showScene)) return null;
     const o = otherCats(G)[0];
     // 对方在高处（爬架 / 窗台）就不去叫她下来
-    if (!o || !o.beh || !PAIR_OK_BEH[o.beh.name] || o.hopping || o.pairWith || o.onPerch) return null;
+    if (!o || !o.beh || !PAIR_OK_BEH[o.beh.name] || o.hopping || o.pairWith || o.onPerch || o.nest) return null;
     if (o === D.Game.G && D.Game.G.paused) return null;
     return o;
   }
@@ -1134,13 +1520,15 @@ window.DOLL = window.DOLL || {};
   // ---------- 选行为 ----------
   // 性格：Luna 爱待在高处（爬架顶的垫子、窗台看风景），Nova 在地上玩玩具、到处逛
   const PERSONA = {
-    luna: { perch: 46, play: 2, wheel: 2, wander: 6, sit: 18, loaf: 12, gaze: 8, groom: 12, zoom: 0.4, stayUp: 1 },
-    nova: { perch: 3, play: 30, wheel: 24, wander: 22, sit: 10, loaf: 8, gaze: 4, groom: 8, zoom: 1.6, stayUp: 0.15 }
+    luna: { perch: 46, play: 2, wheel: 2, wander: 6, sit: 18, loaf: 12, gaze: 8, groom: 12, zoom: 0.4, stayUp: 1, box: 5, bed: 9, sun: 16, tag: 5 },
+    nova: { perch: 3, play: 30, wheel: 24, wander: 22, sit: 10, loaf: 8, gaze: 4, groom: 8, zoom: 1.6, stayUp: 0.15, box: 12, bed: 7, sun: 9, tag: 16 }
   };
+  AI.PERSONA = PERSONA;
   AI.choose = function (G) {
     const c = cs(G);
     const P = PERSONA[G.catId] || PERSONA.luna;
-    const hour = new Date().getHours();
+    // 跟窗外的时间走（调试时 ?hour= 指定的也算）
+    const hour = D.Game && D.Game.hourNow != null ? D.Game.hourNow : new Date().getHours();
     const night = hour >= 23 || hour < 6;
     const room = !!(D.Game && D.Game.showScene);
     let w;
@@ -1155,7 +1543,7 @@ window.DOLL = window.DOLL || {};
       if (night) w.sleep += 40;
       if (c.mood > 45 && G.sinceTouch > 25) w.wantpet = 6 + Math.min(20, (G.sinceTouch - 25) * .3);
       const fed = D.Game && D.Game.bowl && D.Game.bowl.fill > 0.05;   // 碗里有饭就下来吃
-      if (fed || (c.litter > 25 && G.sinceLitter > 90)) w.hopDown += 30;
+      if (fed || (c.litter > 25 && G.sinceLitter > 90 && !(D.Game && D.Game.focusMode))) w.hopDown += 30;
       // 刚上来先待一会儿（Luna 至少 45 秒），别一落脚就又跳下去
       if ((G.perchT || 0) < 45 * P.stayUp) w.hopDown = 0;
     } else {
@@ -1177,6 +1565,12 @@ window.DOLL = window.DOLL || {};
       if (bowl && bowl.fill > 0.05 && !(G.beh && G.beh.name === 'goEat')) w.goEat = 60;
       const water = D.Game && D.Game.water;
       if (water && water.fill > 0.05 && !(G.beh && G.beh.name === 'goDrink')) w.goDrink = 12;
+      if (room) {
+        // 纸箱、猫窝（空着才去）、地板上的太阳
+        if (nestFree(G, 'box')) w.box = P.box;
+        if (nestFree(G, 'bed')) w.bedNap = P.bed + (c.energy < 40 ? 10 : 0) + (night ? 14 : 0);
+        if (D.Scene.sunSpot(G.L)) w.sunbathe = P.sun;
+      }
     }
     if (c.coat < 60) w.groom += (60 - c.coat) * 0.35;
     // 两只一起：心情好就去找对方舔毛，困了就挨着睡
@@ -1187,9 +1581,33 @@ window.DOLL = window.DOLL || {};
       w.pairGroom = (c.mood > 40 && oc.mood > 30) ? 9 : 2;
       w.pairSleep = 3 + (c.energy < 45 ? 22 : 0) + (night ? 24 : 0);
     }
+    // 你追我跑：两只都有精神的时候
+    if (partner && !night && c.energy > 50 && cs(partner).energy > 45 && partner.beh.name !== 'sleep') w.tag = P.tag;
+    // 番茄钟专注的时候两只猫都安静下来陪你：不提任何要求（不讨摸、不讨吃）、不上厕所、不疯跑、少玩，多趴着睡觉。
+    // 憋着的事等休息了再说
+    if (D.Game && D.Game.focusMode) {
+      w.zoomies = 0; w.tag = 0; w.wantpet = 0; w.useLitter = 0;
+      if (w.play) w.play *= 0.25;
+      if (w.wheel) w.wheel *= 0.2;
+      w.loaf += 10; w.sleep += 8; w.sit += 5;
+    }
+    if (D.Game && D.Game.breakMode && !G.onPerch && c.mood > 30) w.wantpet = (w.wantpet || 0) + 12;   // 休息时间：来找你玩
     if (G.lastBeh && w[G.lastBeh] !== undefined) w[G.lastBeh] *= 0.25;
-    const pick = U.weighted(w);
+    let pick = U.weighted(w);
     if (pick === 'pairGroom' || pick === 'pairSleep') return startPair(G, partner, pick);
+    if (pick === 'tag') {
+      // 发起的那只追，另一只跑
+      G.tagWith = partner; partner.tagWith = G;
+      AI.start(partner, 'tagLead');
+      partner.tagWith = G;
+      return 'tagFollow';
+    }
+    // 想在地上睡觉：一半时候会改去猫窝或者纸箱里睡（空着的话）
+    if (pick === 'sleep' && !G.onPerch && room) {
+      const r = Math.random();
+      if (r < 0.4 && nestFree(G, 'bed')) pick = 'bedNap';
+      else if (r < 0.65 && nestFree(G, 'box')) { G.boxWant = 'nap'; pick = 'box'; }
+    }
     if (pick === 'perch') {
       const opts = ['tree', 'sill'].filter(n => freePerch(G, n) && AI.perchPath(G, n));
       if (!opts.length) return 'sit';
@@ -1200,7 +1618,8 @@ window.DOLL = window.DOLL || {};
 
   // 要在地上做的事（走路、吃饭、上厕所、追逗猫棒）：人在高处就先跳下来
   // （追逗猫棒不在这里面：在高处也能玩，逗猫棒落到地上时它自己会跳下来）
-  const NEEDS_FLOOR = { refuel: 1, wander: 1, zoomies: 1, useLitter: 1, goEat: 1, play: 1, perch: 1, stretch: 1, pairGroom: 1, pairSleep: 1, wheel: 1, goDrink: 1 };
+  const NEEDS_FLOOR = { refuel: 1, wander: 1, zoomies: 1, useLitter: 1, goEat: 1, play: 1, perch: 1, stretch: 1, pairGroom: 1, pairSleep: 1, wheel: 1, goDrink: 1,
+    bedNap: 1, box: 1, sunbathe: 1, come: 1, goTreat: 1, tagLead: 1, tagFollow: 1 };
 
   AI.start = function (G, name) {
     // 追逗猫棒跳到一半被打断：先落到终点，下面才知道它现在在不在高处
@@ -1208,6 +1627,8 @@ window.DOLL = window.DOLL || {};
     // 停在半路的落脚点上（爬架下面两层、砂盆顶上）只是追逗猫棒时歇一下脚，不在那儿坐着 / 睡觉：别的事都先下地
     const mid = G.onPerch && G.perchAt != null && G.perchAt < lastIdx(G, G.onPerch);
     if (G.onPerch && name !== 'chase' && name !== 'hopDown' && (NEEDS_FLOOR[name] || mid)) { G.afterHop = name; name = 'hopDown'; }
+    // 在猫窝 / 纸箱里：不管接下来做什么，先跳出来
+    if ((G.inBed || G.inBox) && name !== 'nestOut') { G.afterHop = name; name = 'nestOut'; }
     // 在碗边想趴下 / 睡觉：先走开，到了别处再趴
     if (LIE_DOWN[name] && !G.noDodge && !G.onPerch && !G.inWheel && G.L && G.L.bowl &&
         D.Game && D.Game.showScene && Math.abs(G.x - G.L.bowl.x) < BOWL_CLEAR) {
@@ -1242,7 +1663,7 @@ window.DOLL = window.DOLL || {};
   AI.animate = function (G, t, dt) {
     const c = cs(G);
     const beh = G.beh ? B[G.beh.name] : null;
-    const sleeping = G.beh && (G.beh.name === 'sleep' || (G.beh.name === 'pairSleep' && G.spr === 'sleep'));
+    const sleeping = G.spr === 'sleep' || (G.inBox && G.boxPose === 'nap');
 
     // 腿由骨骼每帧算；step() 不再被调用就淡回站立
     G.gaitHold = (G.gaitHold || 0) - dt;
@@ -1270,11 +1691,16 @@ window.DOLL = window.DOLL || {};
     if (G.blinkT <= 0) { G.blinkT = U.rnd(2.2, 6.5); G.blinkP = 0.13; }
     if (G.blinkP > 0) G.blinkP -= dt;
 
+    G.boopT = Math.max(0, (G.boopT || 0) - dt);
+    G.slowBlink = Math.max(0, (G.slowBlink || 0) - dt);
     if (sleeping) ov = 'eye_shut';
+    else if (G.boopT > 0) ov = 'eye_win';                                  // 被点了一下鼻子：「> <」
+    else if (G.slowBlink > 0 && G.slowBlink < 1.1) ov = 'eye_shut';        // 慢慢眨一下眼
+    else if (G.spr === 'stretch') ov = 'eye_shut';                         // 伸懒腰眯着眼
     else if (G.winT > 0 && (G.playPhase === 'win' || G.catchPhase === 'win')) ov = 'eye_win';   // 扑到玩具 / 抓到逗猫棒的得意脸
-    else if (G.petStroke > 0 || G.brushStroke > 0 || G.forceHappy) ov = 'eye_happy';
+    else if (G.petStroke > 0 || G.brushStroke > 0 || G.forceHappy || G.spr === 'groom') ov = 'eye_happy';
     else if (G.blinkP > 0) ov = 'eye_shut';
-    else if (G.beh && (G.beh.name === 'chase')) ov = 'eye_big';
+    else if (G.beh && (G.beh.name === 'chase' || G.beh.name === 'beg' || G.beh.name === 'goTreat')) ov = 'eye_big';
     else if (beh && beh.look === 'up') ov = 'eye_up';
     else if (c.mood < 28) ov = 'eye_half';
     G.eyeOv = ov;

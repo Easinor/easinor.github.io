@@ -59,7 +59,8 @@ window.DOLL = window.DOLL || {};
   // ---------- 布局（全部是虚拟像素）----------
   S.layout = function (VW, VH) {
     const floorY = Math.round(VH * 0.74);
-    const winW = Math.round(Math.min(VW * 0.40, 104));
+    // 窗户右边留出一幅窗帘的位置（不然右边那幅窗帘在屏幕外面）
+    const winW = Math.round(Math.min(VW * 0.40, 104, VW - Math.round(VW * 0.60) - 13));
     const winH = Math.round(Math.min(VH * 0.46, 68));
     const catY = floorY + Math.round((VH - floorY) * 0.26);   // 猫踩的那一排地面
     const litter = { x: Math.round(Math.min(VW - 42, VW * 0.85)), y: floorY + 7 };
@@ -82,7 +83,9 @@ window.DOLL = window.DOLL || {};
       step: { x: litter.x - 2, y: litter.y - 23 },
       // 猫跑轮：靠墙立着，跑道内圈底部就是猫踩的地方
       wheel: { x: wheelX, r: 33, ri: 29, cy: catY - 32, runY: catY - 2 },
-      bed: { x: Math.round(Math.max(26, VW * 0.08)), y: VH - 5 },
+      // 猫窝在左下角、纸箱在右下角：都在猫平时走不到的最前面，猫要跳进去
+      bed: { x: Math.round(Math.max(36, VW * 0.13)), y: VH - 4 },
+      box: { x: Math.round(VW - Math.max(27, VW * 0.10)), y: VH - 5 },
       litter: litter,
       bowl: { x: Math.round(Math.max(88, VW * 0.42)), y: floorY + 10 }   // 碗放在地上，离墙根留一点
     };
@@ -509,25 +512,40 @@ window.DOLL = window.DOLL || {};
   }
 
   // ---------- 装饰 ----------
-  // 窗帘：窗两边各一幅，中间用绑带收一下
+  // 窗帘：一根两头带圆球的窗帘杆，上面一道扇贝边的帘头；两边各一幅，中间用绑带收一下，布上有几道竖褶
   function drawCurtains(ctx, L, t, night) {
     const w = L.win;
-    const a = night ? '#7E5F86' : '#F2B9C4', b = night ? '#6A4F72' : '#E39AAA';
-    PX.rect(ctx, w.x - 8, w.y - 6, w.w + 16, 3, night ? '#6A5468' : '#A8795A');
+    const a = night ? '#7E5F86' : '#F2B9C4', b = night ? '#6A4F72' : '#E39AAA', hi = night ? '#8C6C94' : '#FAD6DD';
+    const rod = night ? '#6A5468' : '#A8795A', rodD = night ? '#55425A' : '#8A6045';
+    const tie = night ? '#C9A85A' : '#F4D27A';
+    PX.rect(ctx, w.x - 12, w.y - 7, w.w + 24, 2, rod);
+    PX.rect(ctx, w.x - 14, w.y - 8, 3, 4, rodD); PX.rect(ctx, w.x + w.w + 11, w.y - 8, 3, 4, rodD);
+    const ty = w.y + Math.round(w.h * 0.55);
     for (const side of [-1, 1]) {
-      const x0 = side < 0 ? w.x - 9 : w.x + w.w + 1;
-      for (let y = w.y - 3; y < w.y + w.h + 8; y++) {
-        const k = (y - (w.y + w.h * 0.55)) / (w.h * 0.55);
+      const x0 = side < 0 ? w.x - 11 : w.x + w.w + 1;
+      const yEnd = w.y + w.h + 9;
+      for (let y = w.y - 5; y <= yEnd; y++) {
+        const k = (y - ty) / (w.h * 0.55);
         const pinch = 1 - Math.max(0, 0.5 - Math.abs(k)) * 0.9;   // 绑带处收窄
-        const wid = Math.round(8 * pinch);
-        const x = side < 0 ? x0 : x0 + 8 - wid;
-        PX.rect(ctx, x, y, wid, 1, a);
-        PX.rect(ctx, x + (side < 0 ? 2 : wid - 3), y, 1, 1, b);
-        PX.rect(ctx, x + (side < 0 ? 5 : wid - 6), y, 1, 1, b);
+        const wid = Math.round(10 * pinch);
+        const x = side < 0 ? x0 : x0 + 10 - wid;
+        PX.rect(ctx, x, y, wid, 1, y === yEnd ? b : a);
+        // 竖褶：靠窗那一侧一道亮边，中间两道暗线
+        PX.rect(ctx, side < 0 ? x : x + wid - 1, y, 1, 1, hi);
+        if (wid > 4) PX.rect(ctx, x + (side < 0 ? 3 : wid - 4), y, 1, 1, b);
+        if (wid > 7) PX.rect(ctx, x + (side < 0 ? 6 : wid - 7), y, 1, 1, b);
       }
-      const ty = w.y + Math.round(w.h * 0.55);
-      PX.rect(ctx, side < 0 ? x0 + 1 : x0 + 3, ty - 1, 5, 3, night ? '#C9A85A' : '#F4D27A');
+      PX.rect(ctx, side < 0 ? x0 : x0 + 4, ty - 1, 6, 3, tie);
+      PX.rect(ctx, side < 0 ? x0 + 5 : x0 + 4, ty + 2, 1, 3, tie);       // 绑带垂下来的一小截穗子
     }
+    // 帘头：一个个半圆的扇贝边，盖住窗帘杆和窗框的上沿（不压到玻璃）
+    const vx0 = w.x - 11, vw = w.w + 22, n = Math.max(3, Math.round(vw / 13)), sw = vw / n;
+    for (let i = 0; i < vw; i++) {
+      const h = 3 + Math.round(Math.sin(((i % sw) / sw) * Math.PI) * 3);
+      PX.rect(ctx, vx0 + i, w.y - 6, 1, h, a);
+      PX.rect(ctx, vx0 + i, w.y - 6 + h - 1, 1, 1, b);
+    }
+    PX.rect(ctx, vx0, w.y - 6, vw, 1, hi);
   }
 
   // 串灯：从左上角垂下来一条，灯泡晚上会亮、会闪
@@ -550,34 +568,76 @@ window.DOLL = window.DOLL || {};
     }
   }
 
-  // 墙上的小搁板：几本书、一小盆多肉、一张 Luna 的相框
-  function drawShelf(ctx, L, night) {
-    const x = Math.round(L.W * 0.30), y = Math.round(L.H * 0.30);
-    const wood = night ? '#5E4A5E' : '#B98A64', woodD = night ? '#4A3A4C' : '#946A48';
-    PX.rect(ctx, x, y, 34, 3, wood);
-    PX.rect(ctx, x, y + 3, 34, 1, woodD);
-    PX.rect(ctx, x + 3, y + 4, 2, 4, woodD);
-    PX.rect(ctx, x + 29, y + 4, 2, 4, woodD);
-    const books = night ? ['#6C7FA8', '#9A6F96', '#7FA08A', '#B08C6A'] : ['#7FA6D8', '#E59AAE', '#9CCB9A', '#F2C77A'];
-    const hs = [11, 9, 12, 10];
-    for (let i = 0; i < 4; i++) {
-      PX.rect(ctx, x + 2 + i * 4, y - hs[i], 3, hs[i], books[i]);
-      PX.rect(ctx, x + 2 + i * 4, y - hs[i] + 2, 3, 1, 'rgba(255,255,255,.35)');
+  // 晚上没开灯时的颜色：整体压成一层带紫的暗色，只留一点原来的色相
+  // C：家具、摆设用（留一半原色，暗里也分得清是什么）；CF：地板、地毯这种大面用（更暗、更平）
+  function NT(hex, base, keep) {
+    const n = parseInt(hex.slice(1), 16);
+    return 'rgb(' + Math.round(base[0] + ((n >> 16) & 255) * keep) + ',' + Math.round(base[1] + ((n >> 8) & 255) * keep) + ',' + Math.round(base[2] + (n & 255) * keep) + ')';
+  }
+  const C = (night, hex) => (night ? NT(hex, [28, 23, 42], 0.5) : hex);
+  const CF = (night, hex) => (night ? NT(hex, [40, 33, 58], 0.14) : hex);
+
+  // 墙上的小搁板：一排书（最右一本斜靠着）、番茄钟、一盆垂下来的绿萝
+  S.shelfPos = function (L) { return { x: Math.round(L.W * 0.30) - 4, y: Math.round(L.H * 0.30) }; };
+  // 番茄钟（搁板中间那只小番茄）：点一下打开番茄钟面板
+  S.tomatoPos = function (L) { const p = S.shelfPos(L); return { x: p.x + 17, y: p.y - 12 }; };
+  S.hitTomato = function (L, x, y) {
+    const p = S.tomatoPos(L);
+    return x >= p.x - 2 && x < p.x + 15 && y >= p.y - 2 && y < p.y + 15;
+  };
+  function drawShelf(ctx, L, t, night) {
+    const P0 = S.shelfPos(L), x = P0.x, y = P0.y;
+    const wood = C(night, '#C4946A'), woodL = C(night, '#DDB48A'), woodD = C(night, '#946A48');
+    // 搁板投在墙上的影子
+    PX.rect(ctx, x + 1, y + 4, 40, 2, 'rgba(60,44,66,.12)');
+    // 板子：上沿亮、下沿暗；两只小三角托架
+    PX.rect(ctx, x - 1, y, 42, 3, wood);
+    PX.rect(ctx, x - 1, y, 42, 1, woodL);
+    PX.rect(ctx, x - 1, y + 3, 42, 1, woodD);
+    for (const bx of [x + 3, x + 34]) {
+      for (let i = 0; i < 4; i++) PX.rect(ctx, bx, y + 4 + i, 4 - i, 1, woodD);
     }
-    // 小相框（里面是 Luna 的小脸）
-    PX.rect(ctx, x + 19, y - 11, 9, 11, night ? '#8B7A6A' : '#D9B48A');
-    PX.rect(ctx, x + 20, y - 10, 7, 9, night ? '#4B4560' : '#FFF6EC');
-    PX.rect(ctx, x + 21, y - 7, 5, 4, night ? '#7A5F52' : '#8C6B55');
-    PX.rect(ctx, x + 23, y - 7, 1, 4, '#FFFDF8');
-    PX.rect(ctx, x + 21, y - 8, 1, 1, night ? '#7A5F52' : '#8C6B55');
-    PX.rect(ctx, x + 25, y - 8, 1, 1, night ? '#7A5F52' : '#8C6B55');
-    PX.rect(ctx, x + 22, y - 6, 1, 1, '#6AA8E8');
-    PX.rect(ctx, x + 24, y - 6, 1, 1, '#6AA8E8');
-    // 多肉
-    PX.rect(ctx, x + 29, y - 4, 4, 4, night ? '#8A5E4C' : '#D98C64');
-    PX.rect(ctx, x + 29, y - 7, 1, 3, '#7FB27A');
-    PX.rect(ctx, x + 31, y - 8, 1, 4, '#8CC07C');
-    PX.rect(ctx, x + 32, y - 6, 1, 2, '#7FB27A');
+    // 书：高矮不一，书脊上一道浅色的签；最右那本斜靠着
+    const books = ['#7FA6D8', '#E59AAE', '#9CCB9A', '#F2C77A'];
+    const hs = [11, 9, 12, 8];
+    for (let i = 0; i < 4; i++) {
+      const bx = x + 1 + i * 3;
+      PX.rect(ctx, bx, y - hs[i], 3, hs[i], C(night, books[i]));
+      PX.rect(ctx, bx, y - hs[i], 1, hs[i], 'rgba(255,255,255,.22)');
+      PX.rect(ctx, bx, y - hs[i] + 2, 3, 1, 'rgba(255,255,255,.4)');
+    }
+    for (let i = 0; i < 9; i++) PX.rect(ctx, x + 13 + Math.round(i * 0.34), y - 9 + i, 3, 1, C(night, '#B79AD8'));
+    PX.rect(ctx, x + 13, y - 7, 3, 1, 'rgba(255,255,255,.4)');
+
+    // 番茄钟：专注时是睁着眼的红番茄、每秒轻轻点一下；休息时变成闭着眼的青番茄；底下搁板边上一条进度
+    const Pm = D.Pomo, tp = S.tomatoPos(L);
+    const run = Pm && Pm.running, brk = Pm && Pm.active && Pm.phase !== 'focus';
+    const bob = run && Math.floor(Date.now() / 500) % 2 ? 1 : 0;
+    if (S.hot === 'tomato') PX.ellipse(ctx, tp.x + 6, tp.y + 6, 9, 8, 'rgba(255,255,255,.4)');
+    PX.rect(ctx, tp.x + 2, tp.y + 11, 9, 1, 'rgba(60,44,66,.25)');
+    PX.tomato(ctx, tp.x, tp.y - bob, brk, brk ? 'shut' : 'open');
+    if (night) PX.ellipse(ctx, tp.x + 6, tp.y + 6 - bob, 7, 6, 'rgba(40,32,62,.35)');
+    if (Pm && Pm.active) {
+      PX.rect(ctx, tp.x, y + 1, 13, 1, C(night, '#7A5638'));
+      PX.rect(ctx, tp.x, y + 1, Math.round(13 * U.clamp(Pm.progress(), 0, 1)), 1, brk ? '#8CC870' : '#F2705E');
+    }
+
+    // 绿萝：小陶盆 + 两条垂到搁板下面的藤，叶子轻轻晃
+    const px = x + 32;
+    const g1 = C(night, '#5E9A5E'), g2 = C(night, '#86C07A');
+    const vine = (vx, len, ph) => {
+      for (let i = 0; i < len; i++) {
+        const sx = vx + Math.round(Math.sin(i * 0.5 + ph + Math.sin(t * 0.9 + ph) * 0.25) * 1.3);
+        PX.rect(ctx, sx, y - 1 + i, 1, 1, g1);
+        if (i % 3 === 1) PX.rect(ctx, sx + (i % 2 ? 1 : -2), y - 1 + i, 2, 2, i % 6 === 1 ? g2 : g1);
+      }
+    };
+    vine(px + 7, 15, 0.4); vine(px + 5, 9, 2.1);
+    PX.rect(ctx, px, y - 6, 7, 6, C(night, '#D98C64'));
+    PX.rect(ctx, px - 1, y - 7, 9, 2, C(night, '#E8A27A'));
+    PX.rect(ctx, px, y - 3, 7, 1, C(night, '#F3E3CC'));
+    PX.rect(ctx, px + 1, y - 10, 2, 3, g2); PX.rect(ctx, px + 3, y - 12, 2, 5, g1); PX.rect(ctx, px + 5, y - 10, 2, 3, g2);
+    PX.rect(ctx, px - 1, y - 9, 2, 2, g1);
   }
 
   // 猫爬架（干净的三段式）：右边一个带拱门和爪印的大猫屋，屋顶是第一层；
@@ -597,7 +657,7 @@ window.DOLL = window.DOLL || {};
       for (let i = 1; i < w; i += 3) R(dx + i, dy + 4, 1, 1, padD);
     };
 
-    PX.ellipse(ctx, x, base + 1, 31, 3, 'rgba(60,44,66,.25)');
+    if (!S.silhouette) PX.ellipse(ctx, x, base + 1, 31, 3, 'rgba(60,44,66,.25)');
     // 底座
     R(-29, -3, 58, 4, pad); R(-29, -3, 58, 1, padL); R(-29, 0, 58, 1, padD);
     // 两根麻绳柱：左边矮的撑着第二层，右边高的从猫屋顶通到软垫
@@ -709,39 +769,140 @@ window.DOLL = window.DOLL || {};
   };
   function drawLamp(ctx, L, night) {
     const p = S.lampPos(L), x = p.x, y = p.y, on = S.lampOn();
-    PX.rect(ctx, x, 0, 1, y - 4, night ? '#2B2438' : '#8C7A6E');
+    PX.rect(ctx, x - 2, 0, 5, 2, C(night, '#A98A72'));                 // 天花板上的灯座
+    PX.rect(ctx, x, 2, 1, y - 9, night ? '#2B2438' : '#8C7A6E');       // 灯线
     if (on) {
-      const a = night ? '.07' : '.10';
-      for (let r = 38; r >= 14; r -= 8) PX.ellipse(ctx, x, y + 6, r, Math.round(r * 0.8), 'rgba(255,214,150,' + a + ')');
+      // 灯罩周围一圈一圈的暖光
+      const a = night ? '.06' : '.09';
+      for (let r = 40; r >= 12; r -= 7) PX.ellipse(ctx, x, y + 5, r, Math.round(r * 0.78), 'rgba(255,214,150,' + a + ')');
     }
     const dim = night && !on;
-    PX.rect(ctx, x - 5, y - 4, 11, 2, dim ? '#8C7A56' : '#E8C87A');
-    PX.rect(ctx, x - 7, y - 2, 15, 4, dim ? '#9A865C' : on ? '#FBE3A4' : '#F4D896');
-    PX.rect(ctx, x - 7, y + 1, 15, 1, dim ? '#7C6A48' : '#D9B470');
-    PX.rect(ctx, x - 1, y + 2, 3, 2, on ? '#FFF6C8' : dim ? '#8E8698' : '#E6DCC6');
+    const body = dim ? '#9A865C' : on ? '#FFE7AC' : '#F2D593';
+    const lite = dim ? '#AC9868' : on ? '#FFF6D6' : '#FBE7B4';
+    const rim = dim ? '#7C6A48' : '#D9B06A';
+    PX.rect(ctx, x - 1, y - 8, 3, 2, dim ? '#6E5E44' : '#B98E52');     // 灯头
+    // 圆顶灯罩：一行一行往下变宽，左边一道高光，下沿压一道深色
+    const half = [2, 4, 6, 7, 8, 8, 9];
+    for (let i = 0; i < half.length; i++) {
+      PX.rect(ctx, x - half[i], y - 6 + i, half[i] * 2 + 1, 1, body);
+      PX.rect(ctx, x - half[i] + 1, y - 6 + i, Math.max(1, half[i] >> 1), 1, lite);
+    }
+    PX.rect(ctx, x - 9, y + 1, 19, 1, rim);
+    PX.rect(ctx, x - 2, y + 2, 5, 2, on ? '#FFF8D8' : dim ? '#8E8698' : '#E9DFCA');   // 灯泡
+    if (on) PX.rect(ctx, x - 1, y + 4, 3, 1, '#FFE9A8');
+    if (S.hot === 'lamp') { PX.rect(ctx, x - 12, y - 4, 1, 1, '#FFFFFF'); PX.rect(ctx, x + 12, y - 2, 1, 1, '#FFFFFF'); PX.rect(ctx, x + 9, y - 8, 1, 1, '#FFFFFF'); }
   }
 
   // ---------- 家具 ----------
-  S.drawBed = function (ctx, x, y) {
-    PX.ellipse(ctx, x, y + 1, 26, 7, 'rgba(60,44,66,.25)');
-    PX.ellipse(ctx, x, y - 3, 26, 9, '#C08BA0');
-    PX.ellipse(ctx, x, y - 5, 20, 6, '#F0DCE2');
-    PX.ellipse(ctx, x, y - 3, 15, 5, '#E0C3CE');
+  // 猫窝：一圈鼓鼓的绒边 + 中间的软垫。part='back' 在猫之前画，'front' 在猫之后画（前沿那半圈压在猫身上，猫就像窝在里面）
+  S.drawBed = function (ctx, x, y, part, night) {
+    const rim = C(night, '#E9A9BC'), rimL = C(night, '#F7CBD8'), rimD = C(night, '#CC869E');
+    const cush = C(night, '#FFF3EA'), cushD = C(night, '#EBD3CF');
+    if (part !== 'front') {
+      PX.ellipse(ctx, x, y + 1, 34, 4, 'rgba(60,44,66,.25)');
+      PX.ellipse(ctx, x, y - 8, 33, 9, rimD);
+      PX.ellipse(ctx, x, y - 9, 32, 8, rim);
+      PX.ellipse(ctx, x, y - 11, 29, 5, rimL);
+      PX.ellipse(ctx, x, y - 8, 27, 6, cushD);      // 垫子：靠里的一圈是绒边投下来的影子
+      PX.ellipse(ctx, x, y - 6, 26, 5, cush);
+      return;
+    }
+    // 前沿：只画下半圈
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x - 35, y - 6, 70, 9); ctx.clip();
+    PX.ellipse(ctx, x, y - 8, 33, 9, rimD);
+    PX.ellipse(ctx, x, y - 9, 33, 8, rim);
+    ctx.restore();
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x - 35, y - 6, 70, 3); ctx.clip();
+    PX.ellipse(ctx, x, y - 12, 31, 8, rimL);       // 绒边鼓起来的那道高光
+    ctx.restore();
+    for (let i = -24; i <= 24; i += 6) PX.rect(ctx, x + i, y - 3 + Math.round(Math.abs(i) / 14), 2, 1, rimD);   // 一圈缝线
+    paw(ctx, x - 1, y - 3, cush);
   };
 
-  S.drawPlant = function (ctx, x, y, t) {
-    const sway = Math.sin(t * 0.8) > 0 ? 0 : 1;
-    PX.rect(ctx, x - 8, y - 13, 16, 14, '#C2714A');
-    PX.rect(ctx, x - 10, y - 16, 20, 4, '#D98C64');
-    PX.rect(ctx, x - 8, y - 11, 16, 2, 'rgba(255,255,255,.18)');
-    const g1 = '#5E8F5A', g2 = '#8CC07C';
-    PX.rect(ctx, x - 2, y - 32, 3, 17, g1);
-    PX.rect(ctx, x - 9 + sway, y - 29, 7, 3, g2);
-    PX.rect(ctx, x - 12 + sway, y - 26, 7, 3, g1);
-    PX.rect(ctx, x + 3 - sway, y - 33, 7, 3, g2);
-    PX.rect(ctx, x + 6 - sway, y - 30, 6, 3, g1);
-    PX.rect(ctx, x - 6, y - 38 + sway, 5, 5, g2);
-    PX.rect(ctx, x + 2, y - 41 + sway, 5, 5, g2);
+  // 墙角的大盆栽（龟背竹）：圆肚子陶盆 + 几片高高低低的大叶子，叶子有叶脉和缺口，轻轻晃
+  S.drawPlant = function (ctx, x, y, t, night) {
+    const pot = C(night, '#D98C64'), potL = C(night, '#EDAA82'), potD = C(night, '#B56E48');
+    const g1 = C(night, '#4E8A58'), g2 = C(night, '#74B070'), g3 = C(night, '#9CD08A'), stem = C(night, '#5E8F5A');
+    // [叶心相对花盆口的位置 x, y, 半宽, 半高, 朝向, 深浅]，从后往前画
+    const leaves = [[-9, -30, 7, 5, -1, 0], [8, -37, 7, 5, 1, 0], [-2, -46, 6, 5, -1, 1], [11, -24, 6, 4, 1, 1], [-12, -18, 6, 4, -1, 1], [3, -28, 5, 4, 1, 2]];
+    leaves.forEach((lf, i) => {
+      const sw = Math.round(Math.sin(t * 0.8 + i * 1.7) * 0.9);
+      const lx = x + lf[0] + sw, ly = y + lf[1];
+      PX.line(ctx, x + (lf[0] > 0 ? 1 : -1), y - 15, lx, ly + 2, stem);
+      const body = lf[5] === 0 ? g1 : lf[5] === 1 ? g2 : g3;
+      const vein = lf[5] === 0 ? g2 : g1;
+      PX.ellipse(ctx, lx, ly, lf[2], lf[3], body);
+      // 叶脉 + 叶缘的两个缺口
+      PX.line(ctx, lx - lf[4] * (lf[2] - 1), ly + 1, lx + lf[4] * (lf[2] - 2), ly - 1, vein);
+      PX.rect(ctx, lx + lf[4] * (lf[2] - 2), ly + 2, 2, 1, vein);
+      PX.rect(ctx, lx - lf[4], ly - lf[3] + 1, 1, 2, vein);
+    });
+    // 花盆：盆口一圈、盆身往下收、一道奶白的腰线
+    PX.ellipse(ctx, x, y + 1, 10, 2, 'rgba(60,44,66,.25)');
+    const half = [8, 8, 8, 8, 7, 7, 7, 6, 6, 5];
+    for (let i = 0; i < half.length; i++) {
+      PX.rect(ctx, x - half[i], y - 10 + i, half[i] * 2, 1, pot);
+      PX.rect(ctx, x - half[i], y - 10 + i, 2, 1, potL);
+      PX.rect(ctx, x + half[i] - 2, y - 10 + i, 2, 1, potD);
+    }
+    PX.rect(ctx, x - 7, y - 6, 14, 1, C(night, '#F6E6D2'));
+    PX.rect(ctx, x - 10, y - 14, 20, 4, potL);
+    PX.rect(ctx, x - 10, y - 11, 20, 1, potD);
+    PX.rect(ctx, x - 8, y - 14, 16, 1, C(night, '#6B4A3A'));    // 盆里的土
+  };
+
+  // 纸箱：猫会跳进去窝着，只露出耳朵和眼睛。part='back' 是箱子里面和翻开的盖子（猫之前画），'front' 是正面那块板（猫之后画）
+  S.BOX_H = 13;   // 正面那块板有多高
+  S.drawBox = function (ctx, x, y, part, night, wob) {
+    const face = C(night, '#DCA56C'), faceL = C(night, '#EDC08C'), faceD = C(night, '#B98350');
+    const inner = C(night, '#8E6238'), flap = C(night, '#E6B67E'), tape = C(night, '#F2E0BC');
+    x += wob ? Math.round(Math.sin(wob * 40) * 1.2) : 0;           // 被碰了一下：左右晃两下
+    if (part !== 'front') {
+      PX.ellipse(ctx, x, y + 1, 25, 3, 'rgba(60,44,66,.25)');
+      PX.rect(ctx, x - 19, y - 20, 38, 8, inner);                  // 箱子里面（后壁）
+      PX.rect(ctx, x - 19, y - 20, 38, 1, faceD);
+      PX.rect(ctx, x - 18, y - 25, 36, 5, flap);                   // 后面那片盖子竖着
+      PX.rect(ctx, x - 18, y - 25, 36, 1, faceL);
+      PX.rect(ctx, x - 18, y - 21, 36, 1, faceD);
+      for (let i = 0; i < 6; i++) {                                // 左右两片盖子往外摊开
+        PX.rect(ctx, x - 21 - i, y - 20 + i, 2, 4, flap);
+        PX.rect(ctx, x + 19 + i, y - 20 + i, 2, 4, flap);
+      }
+      PX.rect(ctx, x - 26, y - 15, 2, 4, faceD); PX.rect(ctx, x + 24, y - 15, 2, 4, faceD);
+      return;
+    }
+    const H = S.BOX_H;
+    PX.rect(ctx, x - 20, y - H, 40, H, face);
+    PX.rect(ctx, x - 20, y - H, 40, 1, faceL);
+    PX.rect(ctx, x - 20, y - H, 1, H, faceL);
+    PX.rect(ctx, x + 19, y - H, 1, H, faceD);
+    PX.rect(ctx, x - 20, y - 1, 40, 1, faceD);
+    PX.rect(ctx, x - 2, y - H, 4, H - 1, tape);                    // 中间一道封箱胶带
+    PX.rect(ctx, x - 2, y - H, 1, H - 1, 'rgba(255,255,255,.35)');
+    paw(ctx, x - 13, y - 7, faceD);                                // 印着的爪印
+    PX.rect(ctx, x + 8, y - 9, 7, 1, faceD); PX.rect(ctx, x + 8, y - 7, 5, 1, faceD); PX.rect(ctx, x + 8, y - 5, 6, 1, faceD);   // 一小块「字」
+    if (S.hot === 'box') PX.frame(ctx, x - 21, y - H - 1, 42, H + 2, 'rgba(255,255,255,.7)');
+  };
+  S.hitBox = function (L, x, y) {
+    const b = L.box;
+    return !!b && x >= b.x - 22 && x <= b.x + 22 && y >= b.y - 24 && y <= b.y + 1;
+  };
+  S.hitBed = function (L, x, y) {
+    const b = L.bed;
+    return !!b && Math.abs(x - b.x) <= 33 && y >= b.y - 17 && y <= b.y + 1;
+  };
+
+  // 零食：一条小鱼饼干。飞在半空的时候地上有个小影子
+  S.drawTreat = function (ctx, tr, night) {
+    const x = Math.round(tr.x), y = Math.round(tr.y - (tr.z || 0));
+    if (tr.z > 1) PX.ellipse(ctx, x, Math.round(tr.y), 3, 1, 'rgba(60,44,66,.2)');
+    const a = C(night, '#F2A65A'), b = C(night, '#D9823A');
+    PX.rect(ctx, x - 3, y - 2, 5, 3, a);
+    PX.rect(ctx, x - 2, y - 3, 3, 1, a); PX.rect(ctx, x - 2, y + 1, 3, 1, b);
+    PX.rect(ctx, x + 2, y - 3, 2, 2, b); PX.rect(ctx, x + 2, y, 2, 2, b);   // 尾巴
+    PX.rect(ctx, x - 2, y - 2, 1, 1, '#4A3020');
   };
 
   // 小爪印（猫砂垫、碗架上用）
@@ -796,7 +957,7 @@ window.DOLL = window.DOLL || {};
     }
   };
 
-  // 饭碗：两只碗直接放在地上的爪印餐垫上（不用碗架了）——左边红色猫耳饭碗（喂食），右边蓝色水碗（喂水，有水时水面会闪）
+  // 饭碗：两只碗直接放在地上的爪印餐垫上（不用碗架了）——左边红色猫耳饭碗（喂食），右边蓝色水碗（喂水）
   S.BOWL_DX = 18;   // 两只碗各离中心多远（红碗在左、蓝碗在右）
   S.drawBowl = function (ctx, x, y, fill, t, water) {
     const R = x - S.BOWL_DX, B = x + S.BOWL_DX;   // 红碗、蓝碗的中心
@@ -830,12 +991,19 @@ window.DOLL = window.DOLL || {};
       }
       PX.dither(ctx, R - 7, y - 7 - h + 1, 14, h, '#A96C33', 1);
     }
-    // 水：有水时碗里一层蓝 + 一闪一闪的高光，水越少碗里露出的碗底越多
+    // 水：有水时碗里一层蓝，水越少碗里露出的碗底越多
     if (water > 0.02) {
       const lv = Math.max(1, Math.round(water * 3));
       PX.rect(ctx, B - 8, y - 4 - lv, 16, lv, '#7FC4F0');
       PX.rect(ctx, B - 8, y - 4 - lv, 16, 1, '#A9DBF7');
-      if (Math.sin(t * 2.2) > 0.2) PX.rect(ctx, B - 5 + Math.round(Math.sin(t) * 3), y - 4 - lv, 2, 1, '#FFFFFF');
+      // 水面平时是静的：只有一小段固定的淡色反光，不闪也不动。有猫在喝水的时候才荡起一圈圈小水纹
+      PX.rect(ctx, B - 6, y - 4 - lv, 3, 1, '#D6EEFB');
+      const drinker = D.Game && D.Game.waterUser && (D.Game.cats || []).find(c => c.catId === D.Game.waterUser);
+      if (drinker && drinker.feedPhase === 'at') {              // 嘴已经凑到碗里了才有水纹（走过来的路上没有）
+        const k = Math.floor(t * 3) % 3;
+        PX.rect(ctx, B - 1 - k * 2, y - 4 - lv, 1, 1, '#E8F6FD');
+        PX.rect(ctx, B + 1 + k * 2, y - 4 - lv, 1, 1, '#E8F6FD');
+      }
     } else {
       PX.rect(ctx, B - 8, y - 5, 16, 1, '#8FB9D6');   // 空碗：只看得到碗底
     }
@@ -899,6 +1067,200 @@ window.DOLL = window.DOLL || {};
     });
   }
 
+  // ---------- 地板、地毯 ----------
+  // 木地板：规规整整的一排排木条——每排一样高、每块一样长，隔一排错开半块（像砌砖那样），
+  // 两种很接近的木色一块隔一块。画一次存成小画布，窗口大小 / 明暗变了才重画
+  const floorCache = { key: '', cv: null };
+  function buildFloor(W, H, night) {
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const g = cv.getContext('2d');
+    const tones = [CF(night, '#D6A574'), CF(night, '#D0A06E')];
+    const seam = CF(night, '#AD7B52'), lite = CF(night, '#E6BE94');
+    const RH = 7, LEN = 44;                                              // 每排的高度、每块木条的长度
+    for (let r = 0, y0 = 0; y0 < H; r++, y0 += RH) {
+      const off = (r & 1) ? LEN / 2 : 0;
+      for (let k = -1, x = -off; x < W; k++, x += LEN) {
+        g.fillStyle = tones[(k + r) & 1];
+        g.fillRect(x, y0, LEN, RH);
+        g.fillStyle = seam;
+        g.fillRect(x + LEN - 1, y0, 1, RH);                              // 木条的接头
+      }
+      g.fillStyle = seam;
+      g.fillRect(0, y0, W, 1);                                           // 两排之间的缝
+      g.fillStyle = lite;
+      g.globalAlpha = 0.5;
+      g.fillRect(0, y0 + 1, W, 1);                                       // 缝底下一道亮边
+      g.globalAlpha = 1;
+    }
+    // 墙根投在地板上的一道影子
+    g.fillStyle = 'rgba(60,44,66,.14)'; g.fillRect(0, 1, W, 1);
+    g.fillStyle = 'rgba(60,44,66,.07)'; g.fillRect(0, 2, W, 2);
+    return cv;
+  }
+
+  // 圆地毯（斜着看是个椭圆）：一圈两色相间的编织边 + 一道细线 + 里面一圈浅色环，毯面上撒着小波点
+  const rugCache = { key: '', cv: null };
+  function buildRug(rx, ry, night) {
+    const cv = document.createElement('canvas');
+    cv.width = rx * 2 + 1; cv.height = ry * 2 + 1;
+    const g = cv.getContext('2d');
+    const body = CF(night, '#F5E3E8'), rimA = CF(night, '#E3AEBF'), rimB = CF(night, '#FAEFF1');
+    const line = CF(night, '#D595AB'), ring = CF(night, '#ECCBD5');
+    for (let y = 0; y <= ry * 2; y++) {
+      for (let x = 0; x <= rx * 2; x++) {
+        const dx = (x - rx) / rx, dy = (y - ry) / ry, d = Math.hypot(dx, dy);
+        if (d > 1) continue;
+        const ang = Math.atan2(dy, dx);
+        // 离边缘几个像素（按这个方向上椭圆的半径算）；边的宽度两侧宽、前后窄，才像平铺在地上的圆
+        const R = 1 / Math.hypot(Math.cos(ang) / rx, Math.sin(ang) / ry);
+        const m = (1 - d) * R / U.lerp(8, 2.6, Math.abs(Math.sin(ang)));
+        let col = body;
+        if (m < 1) col = (Math.floor((ang + Math.PI) / (Math.PI * 2) * 52) & 1) ? rimA : rimB;
+        else if (m < 1.35) col = line;
+        else if (m > 2.5 && m < 2.9) col = ring;
+        else if (m > 3.4 && y % 5 === 0 && (x + ((y / 5) & 1) * 4) % 8 === 0) col = ring;
+        g.fillStyle = col;
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+    return cv;
+  }
+  S.rugPos = function (L) {
+    const fh = L.H - L.floorY;
+    return { x: Math.round(L.W / 2), y: L.floorY + Math.round(fh * 0.55), rx: Math.round(L.W * 0.3), ry: Math.round(fh * 0.42) };
+  };
+
+  // ---------- 光 ----------
+  // 从窗户照进来、落在地板上的那片光：白天是阳光（早上偏右，傍晚被拉长、偏到左边，越低越暖），晚上是月光。
+  // 返回一行一行的光斑 { rows: [[y, x0, x1]…], rgb, a, x, y（猫晒太阳趴的地方）, sun }；没有就是 null
+  S.beam = function (L, hour) {
+    const sky = S.skyOf(hour), w = L.win;
+    let pos, alt, rgb, a;
+    if (sky.sun != null) {
+      alt = Math.sin(Math.PI * sky.sun);
+      const k = U.clamp((alt - 0.06) / 0.2, 0, 1);
+      if (k <= 0) return null;
+      pos = sky.sun;
+      const low = 1 - U.clamp(alt / 0.5, 0, 1);
+      rgb = low > 0.5 ? '255,200,120' : '255,244,184';
+      a = (0.36 + 0.08 * low) * k;
+    } else if (sky.star > 0.5) {
+      pos = 0.72; alt = 0.7; rgb = '176,196,255';
+      a = 0.10 * U.clamp((sky.star - 0.5) / 0.3, 0, 1);
+    } else return null;
+    const slope = (0.5 - pos) * 2.2;
+    const near = L.floorY + 3 + Math.round(4 * (1 - alt));
+    const far = Math.min(L.H - 3, near + 13 + Math.round(13 * (1 - alt)));
+    // 光斑整体往屋里（左边）偏一些：正对着窗户的那块地板被砂盆挡着，偏过来才看得见
+    const cxAt = (y) => w.x + w.w / 2 - 30 + slope * (y - L.floorY + 8);
+    const rows = [];
+    for (let y = near; y <= far; y++) {
+      const tt = (y - near) / (far - near);
+      if (Math.abs(tt - 0.54) < 1.1 / (far - near)) continue;          // 窗棂的横档投下来的影子
+      const cx = cxAt(y), half = w.w / 2 * (1 + 0.16 * tt);
+      rows.push([y, Math.round(cx - half), Math.round(cx - 1.5)]);
+      rows.push([y, Math.round(cx + 1.5), Math.round(cx + half)]);       // 中间空一条：竖档的影子
+    }
+    // 猫晒太阳趴的那一排，以及光斑在这一排的左右边界
+    const my = U.clamp(L.floorY + Math.round((L.H - L.floorY) * 0.42), near, far);
+    const hm = w.w / 2 * (1 + 0.16 * (my - near) / (far - near));
+    return { rows: rows, rgb: rgb, a: a, y: my, x0: cxAt(my) - hm, x1: cxAt(my) + hm, sun: sky.sun != null };
+  };
+  function drawBeam(ctx, L, b, alpha) {
+    ctx.fillStyle = 'rgba(' + b.rgb + ',' + alpha.toFixed(3) + ')';
+    for (const r of b.rows) {
+      const x0 = Math.max(0, r[1]), x1 = Math.min(L.W, r[2]);
+      if (x1 > x0) ctx.fillRect(x0, r[0], x1 - x0, 1);
+    }
+  }
+  // 这个位置在不在光斑里（猫站在光里的时候，背后被照亮：轮廓上一圈亮边、身前拖一道影子）
+  S.inBeam = function (x, y) {
+    const b = S.beamNow;
+    if (!b) return false;
+    y = Math.round(y);
+    for (const r of b.rows) if (Math.abs(r[0] - y) <= 1 && x >= r[1] - 4 && x <= r[2] + 4) return true;   // 窗棂影子那几格也算在光里
+    return false;
+  };
+  // 猫晒太阳的地方：白天、光斑落在屏幕里、离饭碗够远才有
+  S.sunSpot = function (L) {
+    const b = S.beamNow;
+    if (!b || !b.sun || b.a < 0.25) return null;
+    // 趴着的猫有 60 多格长：整只要在光斑里、在屏幕里，还不能压到饭碗的餐垫上
+    const lo = Math.max(b.x0 + 22, L.bowl.x + 68, 34), hi = Math.min(b.x1 - 22, L.W - 34);
+    if (lo > hi) return null;
+    return { x: Math.round(U.clamp((b.x0 + b.x1) / 2, lo, hi)), y: b.y };
+  };
+
+  // 天黑以后的明暗（main.js 在猫和家具都画完以后调）：整间屋子罩一层暗色，
+  //   开着灯：灯底下一大圈是亮的，越往墙角越暗；
+  //   没开灯：屋里都暗，只有窗户亮着、月光落在地板上；挡在窗前的东西（爬架、绿植、窗台上的猫）是一片剪影。
+  // drawFront(c)：把地上的家具和猫按前后顺序画到 c 上（用来算哪些地方被它们挡住了）
+  const lightCv = document.createElement('canvas'), silCv = document.createElement('canvas');
+  S.drawLight = function (ctx, L, t, hour, drawFront) {
+    const sky = S.skyOf(hour), on = S.lampOn();
+    const dusk = U.clamp(sky.star / 0.55, 0, 1);
+    const b = S.beamNow;
+    if (dusk <= 0.01) return;
+    const a = (on ? 0.36 : 0.5) * dusk;
+    for (const cv of [lightCv, silCv]) if (cv.width !== L.W || cv.height !== L.H) { cv.width = L.W; cv.height = L.H; }
+    const g = lightCv.getContext('2d'), w = L.win;
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+    g.clearRect(0, 0, L.W, L.H);
+    g.fillStyle = 'rgba(16,11,40,' + a.toFixed(3) + ')';
+    g.fillRect(0, 0, L.W, L.H);
+    g.globalCompositeOperation = 'destination-out';
+    if (on) {
+      // 灯光：以灯底下为中心一圈一圈往外暗下去
+      const p = S.lampPos(L), cy = Math.round(p.y + (L.H - p.y) * 0.5);
+      for (let i = 0; i < 7; i++) {
+        const k = 1 - i / 7;
+        PX.ellipse(g, p.x, cy, Math.round(L.W * (0.2 + 0.5 * k)), Math.round(L.H * (0.26 + 0.52 * k)), 'rgba(0,0,0,.2)');
+      }
+    } else if (b && !b.sun) {
+      // 月光落在地板上的那一片。光是从猫身后的窗户照进来的：亮的是地板，站在光里的猫和家具朝着我们的这一面照不到，
+      // 所以先把光斑涂出来、再把地上的东西从里面抠掉，只擦亮剩下的地板
+      const c0 = silCv.getContext('2d');
+      c0.globalCompositeOperation = 'source-over';
+      c0.clearRect(0, 0, L.W, L.H);
+      drawBeam(c0, L, { rows: b.rows, rgb: '0,0,0' }, 1);
+      c0.globalCompositeOperation = 'destination-out';
+      S.silhouette = true;
+      if (drawFront) drawFront(c0);
+      S.silhouette = false;
+      g.globalAlpha = 0.5;
+      g.drawImage(silCv, 0, 0);
+      g.globalAlpha = 1;
+    }
+    // 窗玻璃不压暗：外面的夜色、星星、亮着灯的窗户都是原来的亮度。
+    // 但只有「真正露出来的玻璃」才这样——挡在玻璃前面的东西（窗棂、爬架、绿植、窗台上的猫…）是屋里的东西，
+    // 和屋里别处受一样的光。做法：先在另一张小画布上涂满玻璃那一块，再把挡在前面的东西从里面抠掉，
+    // 剩下的就是露出来的玻璃，只把这一块从暗色层上擦掉
+    const c = silCv.getContext('2d');
+    c.globalCompositeOperation = 'source-over';
+    c.clearRect(0, 0, L.W, L.H);
+    c.fillStyle = '#000';
+    c.fillRect(w.x, w.y, w.w, w.h);
+    c.globalCompositeOperation = 'destination-out';
+    c.save();
+    c.beginPath(); c.rect(w.x, w.y, w.w, w.h); c.clip();
+    const mx0 = w.x + ((w.w / 2) | 0) - 1, my0 = w.y + ((w.h * 0.46) | 0);
+    PX.rect(c, mx0, w.y, 2, w.h, '#000'); PX.rect(c, w.x, my0, w.w, 2, '#000');     // 窗棂
+    PX.rect(c, w.x + 1, w.y + w.h - 9, 7, 9, '#000');                               // 窗台上的小花盆
+    S.silhouette = true;                                                            // 画剪影：半透明的影子、光晕都不要画
+    drawCatTree(c, L, t, true);
+    S.drawPlant(c, L.W - 18, L.floorY + 11, t, true);
+    if (drawFront) drawFront(c);
+    S.silhouette = false;
+    c.restore();
+    g.globalAlpha = 0.85;
+    g.drawImage(silCv, 0, 0);          // g 这时是 destination-out：把露出来的玻璃那一块擦掉大半
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'source-over';
+    ctx.drawImage(lightCv, 0, 0);
+  };
+
   S.draw = function (ctx, L, t, hour, mouse) {
     const sky = S.skyOf(hour);
     // 窗外的天色跟着电脑时间走；屋里暗不暗还要看灯：晚上开着灯，屋里就是亮的
@@ -915,6 +1277,9 @@ window.DOLL = window.DOLL || {};
       PX.rect(ctx, x, 0, 4, L.floorY, wallB);
       for (let y = 6 + ((x / 12) % 2) * 9; y < L.floorY - 26; y += 18) PX.rect(ctx, x + 8, y, 1, 1, night ? '#5A4F6E' : '#E8B7B2');
     }
+    // 天花板底下一道石膏线
+    PX.rect(ctx, 0, 0, L.W, 2, night ? '#554A66' : '#FBF1E6');
+    PX.rect(ctx, 0, 2, L.W, 1, night ? '#352D45' : '#D9BDA6');
     // 下半截护墙板
     const wainY = L.floorY - 24;
     PX.rect(ctx, 0, wainY, L.W, 20, night ? '#3E3550' : '#E6CDB8');
@@ -926,31 +1291,40 @@ window.DOLL = window.DOLL || {};
     drawWindow(ctx, L, t, sky, night);
     drawCurtains(ctx, L, t, night);
     drawLights(ctx, L, t, night);
-    drawShelf(ctx, L, night);
+    drawShelf(ctx, L, t, night);
     drawCatTree(ctx, L, t, night);
 
     // 挂画
     drawPhotos(ctx, L, t, night, mouse);
 
-    // 踢脚线 + 地板
+    // 踢脚线：上沿一道亮线、下沿一道暗线
     PX.rect(ctx, 0, L.floorY - 4, L.W, 4, night ? '#342C42' : '#C49C82');
-    PX.rect(ctx, 0, L.floorY, L.W, L.H - L.floorY, floorA);
-    PX.dither(ctx, 0, L.floorY, L.W, L.H - L.floorY, floorB, 0);
-    for (let i = 1; i <= 4; i++) {
-      const y = L.floorY + Math.round((L.H - L.floorY) * Math.pow(i / 4.4, 1.5));
-      PX.rect(ctx, 0, y, L.W, 1, plank);
-    }
+    PX.rect(ctx, 0, L.floorY - 4, L.W, 1, night ? '#42384F' : '#D9B59B');
+    PX.rect(ctx, 0, L.floorY - 1, L.W, 1, night ? '#2A2338' : '#A9806A');
+    // 木地板
+    const fh = L.H - L.floorY, fkey = L.W + 'x' + fh + (night ? 'n' : 'd');
+    if (floorCache.key !== fkey) { floorCache.key = fkey; floorCache.cv = buildFloor(L.W, fh, night); }
+    ctx.drawImage(floorCache.cv, 0, L.floorY);
 
     // 地毯
-    const rugY = L.floorY + Math.round((L.H - L.floorY) * 0.55);
-    PX.ellipse(ctx, Math.round(L.W / 2), rugY, Math.round(L.W * 0.3), Math.round((L.H - L.floorY) * 0.42), night ? '#554A6B' : '#E3C6CF');
-    PX.ellipse(ctx, Math.round(L.W / 2), rugY, Math.round(L.W * 0.24), Math.round((L.H - L.floorY) * 0.32), night ? '#60537A' : '#F0DCE2');
-    PX.ellipse(ctx, Math.round(L.W / 2), rugY, Math.round(L.W * 0.18), Math.round((L.H - L.floorY) * 0.22), night ? '#554A6B' : '#E3C6CF');
+    const rug = S.rugPos(L), rkey = rug.rx + 'x' + rug.ry + (night ? 'n' : 'd');
+    if (rugCache.key !== rkey) { rugCache.key = rkey; rugCache.cv = buildRug(rug.rx, rug.ry, night); }
+    PX.ellipse(ctx, rug.x, rug.y + 1, rug.rx, rug.ry, 'rgba(60,44,66,.16)');
+    ctx.drawImage(rugCache.cv, rug.x - rug.rx, rug.y - rug.ry);
 
-    S.drawPlant(ctx, L.W - 18, L.floorY + 11, t);
+    // 窗户照进来的光：白天的阳光直接铺在地板和地毯上（晚上的月光在 drawLight 里做）
+    S.beamNow = S.beam(L, hour);
+    if (S.beamNow && (S.beamNow.sun || !S.lampOn())) drawBeam(ctx, L, S.beamNow, S.beamNow.a);
+    // 开着灯：灯底下的地板上一圈暖光
+    if (S.lampOn()) {
+      const lp = S.lampPos(L);
+      PX.ellipse(ctx, lp.x, L.floorY + Math.round(fh * 0.4), Math.round(L.W * 0.22), Math.round(fh * 0.3), 'rgba(255,226,160,.09)');
+    }
+
+    S.drawPlant(ctx, L.W - 18, L.floorY + 11, t, night);
     drawLamp(ctx, L, night);
 
-    // 开着灯：整间屋子罩一层暖光（晚上更明显）。没开灯的晚上由 main.js 在最后整屏压暗
+    // 开着灯：整间屋子罩一层暖光（晚上更明显）。天黑以后的明暗由 main.js 最后调 drawLight 来压
     if (S.lampOn()) {
       ctx.fillStyle = sky.night ? 'rgba(255,206,140,.10)' : 'rgba(255,224,170,.05)';
       ctx.fillRect(0, 0, L.W, L.H);

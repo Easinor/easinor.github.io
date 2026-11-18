@@ -45,6 +45,8 @@ window.DOLL = window.DOLL || {};
     water: { fill: 0.6 },              // 水碗：开局有大半碗水
     wand: { on: false, x: 0, y: 0, vx: 0, vy: 0, hx: 0, hy: 0, speed: 0 },
     poops: [],
+    treats: [],                        // 扔在地上的零食
+    boxWob: 0,                         // 纸箱被碰了以后晃的那一下（秒）
     sandCd: 0,
     wandHits: 0,
     forceHour: null
@@ -89,7 +91,7 @@ window.DOLL = window.DOLL || {};
 
   // 逗猫棒离哪只猫近，哪只就被吸引过来玩：另一只明显更近、并且持续半秒以上，就换成它来追。
   // 睡着的、在吃饭喝水的、在上厕所的、在跑轮里的、正在半空跳的不叫；正在追的那只跳到一半时也不换。
-  const WAND_BUSY = { sleep: 1, pairSleep: 1, useLitter: 1, hopDown: 1, perch: 1, wheel: 1, goEat: 1, goDrink: 1 };
+  const WAND_BUSY = { sleep: 1, pairSleep: 1, useLitter: 1, hopDown: 1, perch: 1, wheel: 1, goEat: 1, goDrink: 1, bedNap: 1, box: 1, nestOut: 1, goTreat: 1 };
   let wandSwitchT = 0;
   function wandAttract(dt) {
     const w = Game.wand;
@@ -157,6 +159,36 @@ window.DOLL = window.DOLL || {};
     luna: ['…Hmph', "Don't poke it", 'Not my best angle', 'Who took that one…'],
     nova: ["That's me!!", 'Look how cute I am!', 'Take another one!', 'Best photo ever!']
   };
+  const CALL_OK = { sit: 1, loaf: 1, wander: 1, groom: 1, gaze: 1, stretch: 1, wantpet: 1, come: 1, play: 1, sunbathe: 1 };
+  function flickToy(toy, fromX) {
+    const dir = fromX > toy.x + 1 ? -1 : fromX < toy.x - 1 ? 1 : (U.chance(.5) ? 1 : -1);
+    toy.vx = dir * U.rnd(60, 95);
+    FX.spawn('dust', toy.x, toy.y + 2, { n: 2, spread: 2, g: -1, life: .4 });
+    // 离得最近、又闲着的那只去追
+    const cand = Game.cats.filter(c => c.beh && CALL_OK[c.beh.name] && !c.onPerch && !c.hopping && !c.nest &&
+      (St.data[c.catId] || {}).energy > 15);
+    cand.sort((a, b) => Math.abs(a.x - toy.x) - Math.abs(b.x - toy.x));
+    if (cand[0]) { cand[0].toyWant = toy; AI.start(cand[0], 'play'); cand[0].sinceTouch = 0; }
+  }
+  // 鼠标停在哪个能点的东西上（用来高亮、出提示）
+  const HINTS = {
+    photo: 'Click: change outfit', lamp: 'Click: light on / off', tomato: 'Click: start / pause the pomodoro',
+    box: 'Click: peek in the box', toy: 'Click: flick the toy', window: 'Click: change the view'
+  };
+  let hoverId = null, hoverT = 0;
+  function hoverOf(p) {
+    const S = D.Scene, L = G.L;
+    if (!Game.showScene || !G.mouseIn || G.dragging || G.tool === 'wand' || G.tool === 'treat') return null;
+    if (S.hitPhoto(L, p.x, p.y)) return 'photo';
+    if (S.hitLamp(L, p.x, p.y)) return 'lamp';
+    if (Act.hitBody(G, p.x, p.y) || Act.hitBody(G2, p.x, p.y)) return null;
+    if (D.Pomo && S.hitTomato(L, p.x, p.y)) return 'tomato';
+    if (G.tool !== 'pet') return S.hitWindow(L, p.x, p.y) ? 'window' : null;
+    if (S.hitBox(L, p.x, p.y)) return 'box';
+    if (Game.toys.some(t => U.dist(p.x, p.y, t.x, t.y) < 8)) return 'toy';
+    return S.hitWindow(L, p.x, p.y) ? 'window' : null;
+  }
+
   function pos(e) {
     const r = canvas.getBoundingClientRect();
     return { x: (e.clientX - r.left) / G.Z, y: (e.clientY - r.top) / G.Z };
@@ -164,13 +196,15 @@ window.DOLL = window.DOLL || {};
   canvas.addEventListener('pointerdown', (e) => {
     const p = pos(e);
     G.mouse = p; G.mouseIn = true;
-    canvas.setPointerCapture(e.pointerId);
+    UI.closePanels();
+    Game.userActAt = performance.now();        // 你动手了：专注期间猫只在这之后的一小会儿里会出声回应
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* 有的环境抓不住指针，不影响 */ }
     // 拿着手 / 梳子点另一只猫：点到哪只就是在摸 / 梳哪只——先换成她，这一下直接落在她身上
     if (Game.showScene && (G.tool === 'pet' || G.tool === 'brush') && Act.hitBody(G2, p.x, p.y) && !Act.hitBody(G, p.x, p.y)) {
       UI.chooseCat(G2.catId);
     }
     // 点墙上的照片：给照片里那只猫换下一套装扮；照片晃一晃、冒爱心，那只猫会接一句话
-    const ph = Game.showScene && G.tool !== 'wand' ? D.Scene.hitPhoto(G.L, p.x, p.y) : null;
+    const ph = Game.showScene && G.tool !== 'wand' && G.tool !== 'treat' ? D.Scene.hitPhoto(G.L, p.x, p.y) : null;
     if (ph) {
       D.Scene.pokePhoto(ph.id);
       FX.toast('Outfit: ' + UI.cycleAcc(ph.id), Math.max(30, ph.x + ph.w / 2), ph.y + ph.h + 6, D.CATS[ph.id].tagColor);
@@ -179,9 +213,35 @@ window.DOLL = window.DOLL || {};
       return;
     }
     // 点吊灯：开 / 关
-    if (Game.showScene && G.tool !== 'wand' && D.Scene.hitLamp(G.L, p.x, p.y)) { UI.toggleLamp(); return; }
+    if (Game.showScene && G.tool !== 'wand' && G.tool !== 'treat' && D.Scene.hitLamp(G.L, p.x, p.y)) { UI.toggleLamp(); return; }
+    const free = Game.showScene && (G.tool === 'pet' || G.tool === 'brush' || G.tool === 'litter') &&
+      !Act.hitBody(G, p.x, p.y) && !(Act.hitBody(G2, p.x, p.y) && !G2.inBox);
+    // 点搁板上的番茄：直接开始计时；正在走就暂停，再点一下继续（要看 / 改设置点右上角的番茄按钮）
+    if (free && D.Pomo && D.Scene.hitTomato(G.L, p.x, p.y)) {
+      const P = D.Pomo, tp = D.Scene.tomatoPos(G.L), fresh = !P.active;
+      P.unlockAudio();
+      P.toggle();
+      if (!fresh) FX.toast(P.running ? 'Resumed · ' + P.fmt() : 'Paused · ' + P.fmt(), tp.x + 6, tp.y - 4, P.phase === 'focus' ? '#D9503F' : '#4F9E58');
+      return;
+    }
+    // 点纸箱：里面有猫就冒出来；没有猫，闲着的那只会过来钻进去
+    if (Game.showScene && G.tool === 'pet' && D.Scene.hitBox(G.L, p.x, p.y) && !(Act.hitBody(G, p.x, p.y) && !G.inBox)) {
+      const inside = AI.pokeBox();
+      if (inside) {
+        if (performance.now() - (Game.boxBondT || 0) > 6000) { Game.boxBondT = performance.now(); St.addBond(); }
+      } else if (G.beh && CALL_OK[G.beh.name] && !G.hopping && !G.nest && !G2.nest) {
+        G.boxWant = 'play';
+        AI.start(G, 'box');
+      }
+      return;
+    }
+    // 点地上的玩具：拨一下让它滚出去，闲着的猫会追过去玩
+    if (free && G.tool === 'pet') {
+      const toy = Game.toys.find(t => U.dist(p.x, p.y, t.x, t.y) < 8);
+      if (toy) { flickToy(toy, p.x); return; }
+    }
     // 点窗户（没点到猫身上）：换窗外的风景，山脉 → 高楼 → 村落
-    if (Game.showScene && G.tool !== 'wand' && D.Scene.hitWindow(G.L, p.x, p.y) &&
+    if (Game.showScene && G.tool !== 'wand' && G.tool !== 'treat' && D.Scene.hitWindow(G.L, p.x, p.y) &&
         !Act.hitBody(G, p.x, p.y) && !Act.hitBody(G2, p.x, p.y)) {
       const w = G.L.win;
       FX.toast('View: ' + D.Scene.nextView(), w.x + w.w / 2, w.y + w.h / 2, '#FFFFFF');
@@ -205,12 +265,8 @@ window.DOLL = window.DOLL || {};
     // 在输入框里打字（填 ID / 密码）时不触发工具快捷键
     const tag = e.target && e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-    const k = e.key.toLowerCase();
-    const map = { p: 'pet', f: 'feed', w: 'water', b: 'brush', l: 'litter', t: 'wand' };
-    const nums = { '1': 'pet', '2': 'feed', '3': 'brush', '4': 'litter', '5': 'wand', '6': 'water' };
-    const id = map[k] || nums[k];
-    if (id) { UI.pickTool(id); UI.flash(id); return; }
-    if (k === 'escape') Act.setTool(G, 'pet');
+    // 工具不再有快捷键，只留 Esc：放下手里的东西、回到「摸」
+    if (e.key === 'Escape') Act.setTool(G, 'pet');
   });
 
   window.addEventListener('resize', () => Game.resize());
@@ -218,6 +274,8 @@ window.DOLL = window.DOLL || {};
   // ---------- 循环 ----------
   let last = performance.now();
   let saveT = 0;
+
+  const showSceneNow = () => St.settings.scene && !document.body.classList.contains('mini');
 
   function frame(now) {
     let dt = (now - last) / 1000;
@@ -238,6 +296,21 @@ window.DOLL = window.DOLL || {};
     const showScene = St.settings.scene && !mini;
     Game.showScene = showScene;
     const L = G.L;
+
+    // 番茄钟：专注的时候猫安静陪着，休息的时候更爱来找你玩
+    const Pm = D.Pomo;
+    Game.focusMode = !!(Pm && Pm.running && Pm.phase === 'focus');
+    Game.breakMode = !!(Pm && Pm.running && Pm.phase !== 'focus');
+    // 零食：落地（弹一下）；地上有零食就叫闲着的猫去吃
+    for (const tr of Game.treats) {
+      if (tr.z > 0 || tr.vz > 0) {
+        tr.vz -= 240 * dt; tr.z += tr.vz * dt;
+        if (tr.z <= 0) { tr.z = 0; tr.vz = tr.vz < -60 ? -tr.vz * 0.35 : 0; }
+      }
+      tr.age = (tr.age || 0) + dt;
+    }
+    if (showSceneNow()) AI.treatTick(dt);
+    Game.boxWob = Math.max(0, Game.boxWob - dt);
 
     wandAttract(dt);
     if (!G.paused) AI.update(G, dt);
@@ -291,6 +364,11 @@ window.DOLL = window.DOLL || {};
     const hour = Game.forceHour != null ? Game.forceHour : now2.getHours() + now2.getMinutes() / 60;
     Game.hourNow = hour;
 
+    // 鼠标停在能点的东西上：那样东西亮一下；停够半秒出一行小字提示（过两秒自己消失）
+    const hov = hoverOf(G.mouse);
+    if (hov !== hoverId) { hoverId = hov; hoverT = 0; } else hoverT += dt;
+    D.Scene.hot = hov;
+
     let hoverLitter = false;
     if (showScene) {
       D.Scene.draw(ctx, L, G.t, hour, G.mouseIn ? G.mouse : null);
@@ -319,35 +397,48 @@ window.DOLL = window.DOLL || {};
     // 地板是个平面：家具和猫按「站在地板上的深度」从后往前画，
     // 靠前的挡住靠后的（猫走到跑轮前面就挡住跑轮，走到后面就被跑轮挡住）。
     // 在爬架 / 窗台上、正在跳的猫最后画（它们在半空，不跟地上的东西比前后）。
+    // 每一项的 f(c) 把自己画到 c 上：平时画到主画布，算光影遮挡时再往小画布上画一遍
     const items = [];
     if (showScene) {
-      const wheelBase = L.catY + 3;
-      items.push({ k: wheelBase, f: () => D.Scene.drawWheel(ctx, L, Game.wheel.angle, 'back', night) });
-      items.push({ k: L.bed.y, f: () => D.Scene.drawBed(ctx, L.bed.x, L.bed.y) });
-      items.push({ k: L.litter.y + 4, f: () => D.Scene.drawLitter(ctx, L.litter.x, L.litter.y, Game.poops, hoverLitter) });
-      items.push({ k: L.bowl.y + 2, f: () => D.Scene.drawBowl(ctx, L.bowl.x, L.bowl.y, Game.bowl.fill, G.t, Game.water.fill) });
-      for (const toy of Game.toys) items.push({ k: toy.y + 3, f: () => D.Scene.drawToys(ctx, [toy], night) });
+      const S = D.Scene, wheelBase = L.catY + 3;
+      items.push({ k: wheelBase, far: true, f: (c) => S.drawWheel(c, L, Game.wheel.angle, 'back', night) });
+      // 猫窝和纸箱都分前后两半：后半在猫之前画，前沿在猫之后画，窝在里面的猫就被前沿挡住下半身
+      items.push({ k: L.bed.y - 8, far: true, f: (c) => S.drawBed(c, L.bed.x, L.bed.y, 'back', night) });
+      items.push({ k: L.bed.y + 0.5, far: true, f: (c) => S.drawBed(c, L.bed.x, L.bed.y, 'front', night) });
+      items.push({ k: L.box.y - 14, f: (c) => S.drawBox(c, L.box.x, L.box.y, 'back', night, Game.boxWob) });
+      items.push({ k: L.box.y + 0.5, f: (c) => S.drawBox(c, L.box.x, L.box.y, 'front', night, Game.boxWob) });
+      items.push({ k: L.litter.y + 4, f: (c) => S.drawLitter(c, L.litter.x, L.litter.y, Game.poops, hoverLitter) });
+      items.push({ k: L.bowl.y + 2, f: (c) => S.drawBowl(c, L.bowl.x, L.bowl.y, Game.bowl.fill, G.t, Game.water.fill) });
+      for (const toy of Game.toys) items.push({ k: toy.y + 3, f: (c) => S.drawToys(c, [toy], night) });
+      for (const tr of Game.treats) items.push({ k: tr.y + 1, f: (c) => S.drawTreat(c, tr, night) });
+      // 逆光：窗户在猫身后。站在地板上那片光里、或者趴在窗台上的猫，轮廓上有一圈亮边
+      const beam = S.beamNow, rimCol = beam ? (beam.sun ? (beam.rgb === '255,200,120' ? '#FFD9A0' : '#FFF4CC') : '#C4D2FF') : null;
       for (const cat of [G, G2]) {
         let k = cat.y;
         if (cat.inWheel) k = wheelBase + 0.1;                       // 在跑轮里：紧跟在跑轮后面画
+        else if (cat.inBed) k = L.bed.y + 0.1;                      // 在猫窝 / 纸箱里：夹在它们的前后两半中间
+        else if (cat.inBox) k = L.box.y + 0.1;
         else if (cat.onPerch || cat.hopping) k = 1000 + cat.y * 0.001;
+        const lit = rimCol && !cat.hopping && !cat.inBed && !cat.inBox && !cat.inWheel &&
+          (cat.onPerch ? cat.onPerch === 'sill' && cat.perchAt == null : S.inBeam(cat.x, cat.y)) &&
+          (beam.sun || !S.lampOn());
+        cat.rim = lit ? rimCol : null;
         items.push({
-          k: k, f: () => {
-            D.drawCat(ctx, cat);
+          k: k, f: (c) => {
+            D.drawCat(c, cat);
             // 在轮子里跑的那只：画完马上补上跑道的前沿，猫就像被框在轮子里
-            if (cat.inWheel) D.Scene.drawWheel(ctx, L, Game.wheel.angle, 'front', night);
+            if (cat.inWheel && !S.silhouette) S.drawWheel(c, L, Game.wheel.angle, 'front', night);
           }
         });
       }
     } else {
-      items.push({ k: 0, f: () => D.drawCat(ctx, G) });
+      items.push({ k: 0, f: (c) => D.drawCat(c, G) });
     }
     items.sort((a, b) => a.k - b.k);
-    for (const it of items) it.f();
-    // 晚上没开灯：连猫和家具一起压暗
-    // 天色越晚压得越暗：傍晚开始慢慢变暗，入夜后最暗；一开灯就亮回来
-    const dusk = D.Scene.lampOn() ? 0 : U.clamp(D.Scene.skyOf(hour).star / 0.55, 0, 1);
-    if (showScene && dusk > 0) { ctx.fillStyle = 'rgba(14,10,36,' + (0.5 * dusk).toFixed(3) + ')'; ctx.fillRect(0, 0, L.W, L.H); }
+    for (const it of items) it.f(ctx);
+    // 天黑以后的明暗：开着灯是灯下亮、墙角暗；没开灯就整间压暗，只有窗户和地上的月光是亮的
+    // （far = 离窗户和月光都远的大件：跑轮、猫窝，算遮挡时不用重画）
+    if (showScene) D.Scene.drawLight(ctx, L, G.t, hour, (c) => { for (const it of items) if (!it.far) it.f(c); });
 
     FX.draw(ctx);
     Act.drawCursor(ctx, G);
@@ -360,12 +451,53 @@ window.DOLL = window.DOLL || {};
       FX.drawBubbles(ctx, cat.x * Z, (cb.y - (cat.lift || 0) - 2) * Z, Z, cat.catId);
     }
     FX.drawToasts(ctx, Z);
+    if (hoverId && hoverT > 0.5 && hoverT < 2.8) {
+      const fs = Math.max(10, Math.round(2.4 * Z));
+      ctx.font = '700 ' + fs + 'px "PingFang SC","Microsoft YaHei",system-ui,sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const text = HINTS[hoverId], tw = Math.round(ctx.measureText(text).width) + fs;
+      const hx = U.clamp(Math.round(G.mouse.x * Z), tw / 2 + 4, L.W * Z - tw / 2 - 4), hy = Math.max(fs, Math.round(G.mouse.y * Z) - 5 * Z);
+      ctx.fillStyle = 'rgba(74,59,82,.86)';
+      ctx.fillRect(hx - tw / 2, hy - fs * 0.85, tw, fs * 1.7);
+      ctx.fillStyle = '#FFFBF4';
+      ctx.fillText(text, hx, hy);
+    }
 
     UI.tick(dt, G.t);
 
     saveT += dt;
     if (saveT > 8) { saveT = 0; St.save(); }
     requestAnimationFrame(frame);
+  }
+
+  // ---------- 番茄钟：猫的反应 ----------
+  const CHEER_OK = { sit: 1, loaf: 1, wander: 1, groom: 1, gaze: 1, stretch: 1, wantpet: 1, come: 1, play: 1, zoomies: 1, beg: 1, bellyUp: 1, sunbathe: 1 };
+  function pomoEvent(evt, d) {
+    const P = D.Pomo;
+    if (UI.pomoRefresh) UI.pomoRefresh();
+    if (evt === 'start') {
+      if (d === 'focus') {
+        UI.banner('Focus · ' + P.fmt(P.total), 'Luna & Nova will keep quiet until the break');
+        FX.say(AI.line(G, 'focus'), { dur: 2.6 });
+      } else {
+        UI.banner(P.NAMES[d] + ' · ' + P.fmt(P.total), 'Stretch, drink some water, pet a cat');
+      }
+    } else if (evt === 'focusDone') {
+      if (d.away) return;
+      const bonus = D.Account && D.Account.user() && D.Account.addBond(25);
+      UI.banner('Focus complete! Tomato #' + d.today + ' today',
+        (d.next === 'long' ? 'Long break' : 'Short break') + ' time' + (bonus ? ' · +25 bond' : ''));
+      for (const cat of Game.cats) {
+        if (!cat.beh || !CHEER_OK[cat.beh.name] || cat.hopping || cat.nest) continue;
+        AI.start(cat, 'cheer');
+        FX.say(AI.line(cat, 'cheer'), { cat: cat.catId, dur: 3 });
+        FX.spawn('heart', cat.x, cat.y - 30, { n: 3, spread: 8, vy: -10, life: 1.6 });
+      }
+    } else if (evt === 'breakDone') {
+      if (d.away) return;
+      UI.banner('Break is over', P.cfg.autoFocus ? 'The next focus round has started' : 'Start the next round when you are ready');
+      FX.say(AI.line(G, 'breakOver'), { dur: 2.6 });
+    }
   }
 
   // ---------- 启动 ----------
@@ -378,7 +510,13 @@ window.DOLL = window.DOLL || {};
     St.firstRun = false;
     document.body.classList.remove('mini');
     Game.forceHour = q.has('hour') ? parseFloat(q.get('hour')) : null;
+    // 调试用：?lamp=0 / 1 直接指定灯的开关（配合 ?hour= 看各个时段开灯 / 关灯的样子）
+    if (q.has('lamp') && Game.forceHour != null) {
+      St.settings.lampPhase = D.Scene.skyOf(Game.forceHour).night ? 'night' : 'day';
+      St.settings.lamp = q.get('lamp') === '1';
+    }
     D.Scene.init();
+    if (D.Pomo) D.Pomo.on = pomoEvent;
     Game.poops = St.poops || [];
     UI.build();
     Game.resize();
@@ -400,7 +538,7 @@ window.DOLL = window.DOLL || {};
     }
 
     setInterval(() => {
-      if (St.firstRun || G.paused) return;
+      if (St.firstRun || G.paused || Game.focusMode) return;      // 专注的时候不闲聊
       const c = St.cur();
       if (G.beh && G.beh.name === 'sleep') return;
       if (c.litter < 25 && U.chance(.4)) FX.say(AI.line(G, 'dirty'), { tone: 'warn' });

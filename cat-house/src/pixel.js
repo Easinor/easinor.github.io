@@ -226,6 +226,7 @@ window.DOLL = window.DOLL || {};
     '-': ['00000', '00000', '00000', '11111', '00000', '00000', '00000'],
     '%': ['11001', '11010', '00010', '00100', '01000', '01011', '10011'],
     '.': ['00000', '00000', '00000', '00000', '00000', '01100', '01100'],
+    ':': ['00000', '01100', '01100', '00000', '01100', '01100', '00000'],
     'L': ['10000', '10000', '10000', '10000', '10000', '10000', '11111'],
     'v': ['00000', '00000', '10001', '10001', '10001', '01010', '00100'],
     ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000']
@@ -243,6 +244,50 @@ window.DOLL = window.DOLL || {};
     return cx - Math.round(x);
   };
   PX.textW = (str) => String(str).length * 6 - 1;
+
+  // 用字符画盖一个小图：rows 里每个字符在 pal 里查颜色，查不到的（比如 '.'）不画
+  PX.stamp = function (ctx, rows, x, y, pal) {
+    x = Math.round(x); y = Math.round(y);
+    for (let j = 0; j < rows.length; j++) {
+      const row = rows[j];
+      for (let i = 0; i < row.length; i++) {
+        const col = pal[row[i]];
+        if (col) { ctx.fillStyle = col; ctx.fillRect(x + i, y + j, 1, 1); }
+      }
+    }
+  };
+
+  // 番茄（13×12）：番茄钟的图标，搁板上那个计时器和界面上的按钮都用它。
+  // 扁圆的果子、顶上一圈星形的绿蒂和一小截果柄、左上一块高光、右下一圈暗面。
+  // green = 还没熟的青番茄（休息的时候用）
+  const TOMATO = [
+    '......S......',
+    '.....gSg.....',
+    '..g.ggGgg.g..',
+    '..rggrGrggr..',
+    '.rrrgrrrgrrr.',
+    'rrhhrrrrrrrrr',
+    'rhhrrrrrrrrrd',
+    'rhrrrrrrrrrrd',
+    'rrrrrrrrrrrdd',
+    'rrrrrrrrrrddd',
+    '.rrrrrrrrddd.',
+    '..rrrrrdddd..'
+  ];
+  PX.TOMATO_W = 13; PX.TOMATO_H = 12;
+  // look：'open' 睁着眼 / 'shut' 眯着眼（休息时）；不传就不画脸
+  PX.tomato = function (ctx, x, y, green, look) {
+    PX.stamp(ctx, TOMATO, x, y, green
+      ? { r: '#A6CF6E', h: '#D6EFAE', d: '#7FAE52', g: '#5E9E4E', G: '#47823E', S: '#6B5A32' }
+      : { r: '#E9503E', h: '#FFA18C', d: '#C0382E', g: '#62A651', G: '#47823E', S: '#6B5A32' });
+    if (!look) return;
+    x = Math.round(x); y = Math.round(y);
+    const k = green ? '#3C5A2A' : '#5E1C18', blush = green ? '#C9E07E' : '#FF8A7A';
+    if (look === 'shut') { PX.rect(ctx, x + 3, y + 8, 2, 1, k); PX.rect(ctx, x + 8, y + 8, 2, 1, k); }
+    else { PX.rect(ctx, x + 4, y + 7, 1, 2, k); PX.rect(ctx, x + 8, y + 7, 1, 2, k); }
+    PX.rect(ctx, x + 6, y + 9, 1, 1, k);                                    // 小嘴
+    PX.rect(ctx, x + 2, y + 9, 2, 1, blush); PX.rect(ctx, x + 9, y + 9, 2, 1, blush);   // 腮红
+  };
 
   D.PX = PX;
 })(window.DOLL);

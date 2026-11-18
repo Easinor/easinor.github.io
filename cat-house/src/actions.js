@@ -1,4 +1,4 @@
-// 五个互动：喂食 / 铲屎 / 打理毛发 / 摸头 / 逗猫棒
+// 七个互动：摸头 / 喂食 / 喂水 / 梳毛 / 铲屎 / 零食 / 逗猫棒
 // 鼠标坐标进来之前已经换算成虚拟像素了。
 window.DOLL = window.DOLL || {};
 (function (D) {
@@ -8,13 +8,17 @@ window.DOLL = window.DOLL || {};
   const A = {};
 
   A.TOOLS = [
-    { id: 'pet', name: 'Pet', key: 'P', hint: 'hold and rub on the cat' },
-    { id: 'feed', name: 'Feed', key: 'F', hint: 'fill the food bowl (red)' },
-    { id: 'water', name: 'Water', key: 'W', hint: 'fill the water bowl (blue)' },
-    { id: 'brush', name: 'Brush', key: 'B', hint: 'stroke back and forth on the cat' },
-    { id: 'litter', name: 'Scoop', key: 'L', hint: 'click the poop in the litter box' },
-    { id: 'wand', name: 'Wand', key: 'T', hint: 'wave it and the cat will pounce' }
+    { id: 'pet', name: 'Pet', hint: 'hold and rub on the cat · click the floor to call her over' },
+    { id: 'feed', name: 'Feed', hint: 'fill the food bowl (red)' },
+    { id: 'water', name: 'Water', hint: 'fill the water bowl (blue)' },
+    { id: 'brush', name: 'Brush', hint: 'stroke back and forth on the cat' },
+    { id: 'litter', name: 'Scoop', hint: 'click the poop in the litter box' },
+    { id: 'treat', name: 'Treat', hint: 'click the floor to toss a fish biscuit' },
+    { id: 'wand', name: 'Wand', hint: 'wave it and the cat will pounce' }
   ];
+
+  // 拿起零食的时候，闲着的猫会凑过来讨
+  const BEG_OK = { sit: 1, loaf: 1, wander: 1, groom: 1, gaze: 1, stretch: 1, wantpet: 1, come: 1 };
 
   A.setTool = function (G, id) {
     if (G.tool === 'wand' && id !== 'wand') D.Game.wand.on = false;
@@ -26,6 +30,11 @@ window.DOLL = window.DOLL || {};
       D.Game.wandHits = 0;
       if (St.cur().energy > 10) D.AI.start(G, 'chase');
       else FX.say('Too tired to play…', { tone: 'warn' });
+    }
+    if (id === 'treat') {
+      for (const cat of (D.Game.cats || [])) {
+        if (cat.beh && BEG_OK[cat.beh.name] && !cat.onPerch && !cat.hopping && !cat.nest && !D.AI.treatFull(cat)) D.AI.start(cat, 'beg');
+      }
     }
     D.UI.syncTools();
   };
@@ -44,7 +53,7 @@ window.DOLL = window.DOLL || {};
   function callCats(beh) {
     for (const cat of (D.Game.cats || [])) {
       const name = cat.beh && cat.beh.name;
-      if (name === beh || /sleep|nap/i.test(name || '') || cat.sleeping) continue;
+      if (name === beh || /sleep|nap/i.test(name || '') || cat.sleeping || (cat.inBox && cat.boxPose === 'nap')) continue;
       D.AI.start(cat, beh);
     }
   }
@@ -133,7 +142,7 @@ window.DOLL = window.DOLL || {};
         FX.spawn('heart', x + U.rnd(-3, 3), y - 4, { vy: -11, g: 1, life: 1.4 });
         if (U.chance(.35)) FX.spawn('note', x + U.rnd(-5, 5), y - 6, { vy: -9, g: .5, life: 1.5 });
         // 摸头摸舒服了：有一定概率翻过来露肚皮打呼噜（心情越好越容易）
-        const busy = G.beh && { bellyUp: 1, sleep: 1, pairSleep: 1, pairGroom: 1, wheel: 1, perch: 1, hopDown: 1 }[G.beh.name];
+        const busy = G.nest || (G.beh && { bellyUp: 1, sleep: 1, pairSleep: 1, pairGroom: 1, wheel: 1, perch: 1, hopDown: 1, goTreat: 1, sunbathe: 1 }[G.beh.name]);
         if (head && !busy && !G.hopping && U.chance(0.08 + Math.max(0, c.mood - 50) * 0.004)) {
           D.AI.start(G, 'bellyUp');
         }
@@ -153,6 +162,41 @@ window.DOLL = window.DOLL || {};
     }
     G.sinceTouch = 0;
     G.purr = Math.min(1, G.purr + 0.04);
+  }
+
+  // ---------- 零食 ----------
+  // 点哪儿就往哪儿扔一块小鱼饼干（落点收在猫走得到的那片地板上），地上最多同时 3 块
+  A.tossTreat = function (G, x, y) {
+    const Gm = D.Game, L = G.L;
+    if (Gm.treats.length >= 3) { FX.say("That's plenty on the floor", { tone: 'warn', dur: 1.8 }); return; }
+    if (now() - (Gm.treatT == null ? -9 : Gm.treatT) < 0.35) return;
+    Gm.treatT = now();
+    const ty = D.AI.clampY(L, y);
+    Gm.treats.push({ x: U.clamp(x, 16, L.W - 16), y: ty, z: Math.max(6, ty - y), vz: 26 });
+    G.sinceTouch = 0;
+  };
+
+  // ---------- 叫猫 ----------
+  // 拿着手点一下空地板：当前照顾的那只小跑过来坐下
+  const COME_OK = { sit: 1, loaf: 1, wander: 1, groom: 1, gaze: 1, stretch: 1, wantpet: 1, come: 1, play: 1, zoomies: 1, sunbathe: 1, beg: 1 };
+  A.callCat = function (G, x, y) {
+    if (now() - (G.callT == null ? -9 : G.callT) < 0.8) return;
+    G.callT = now();
+    const L = G.L, ty = D.AI.clampY(L, y);
+    FX.spawn('dust', x, ty, { n: 3, spread: 3, g: -1, life: .5 });
+    if (!G.beh || !COME_OK[G.beh.name] || G.hopping || G.nest) return;
+    G.comeTo = { x: x, y: ty };
+    D.AI.start(G, 'come');
+  };
+
+  // ---------- 点鼻子 ----------
+  // 在猫脸上轻轻点一下（按下就松开、没拖动）：猫挤一下眼
+  function boop(G, x, y) {
+    G.boopT = 0.55;
+    FX.toast('boop!', x, y - 8, '#E8607F');
+    if (U.chance(.5)) FX.say(D.AI.line(G, 'boop'), { cat: G.catId, dur: 1.4 });
+    if (U.chance(.25)) FX.spawn('puff', x + 6 * G.facing, y + 2, { n: 2, spread: 2, g: -2, life: .5 });
+    St.cur().mood = U.clamp(St.cur().mood + 1, 0, 100);
   }
 
   // ---------- 逗猫棒 ----------
@@ -175,6 +219,8 @@ window.DOLL = window.DOLL || {};
   A.onDown = function (G, x, y) {
     G.dragging = true;
     G.lastX = x; G.lastY = y;
+    G.downT = now(); G.downX = x; G.downY = y; G.downMoved = 0;
+    if (G.tool === 'treat') { A.tossTreat(G, x, y); return; }
     if (G.tool === 'litter') {
       if (!A.scoopAt(G, x, y) && A.hitBody(G, x, y)) FX.say(U.pick(['Meow?', "That's not the litter box"]), { tone: 'warn' });
       return;
@@ -189,17 +235,25 @@ window.DOLL = window.DOLL || {};
         FX.spawn('heart', x, y - 5, { n: 4, spread: 4, vy: -13, life: 1.4, big: 1 });
         St.addBond(3);
       }
+    } else if (G.tool === 'pet' && D.Game.showScene && y >= D.AI.floorMin(G.L) - 6 &&
+        !(D.Game.G2 && A.hitBody(D.Game.G2, x, y))) {
+      A.callCat(G, x, y);
     }
   };
 
   A.onMove = function (G, x, y) {
+    if (Math.abs(x - G.lastX) + Math.abs(y - G.lastY) > 0.4) G.stillT = 0;
     if (!G.dragging) { G.lastX = x; G.lastY = y; return; }
+    G.downMoved = (G.downMoved || 0) + U.dist(x, y, G.lastX, G.lastY);
     if (G.tool === 'pet' || G.tool === 'brush') rub(G, x, y, G.lastX, G.lastY, G.tool);
     if (G.tool === 'litter') A.scoopAt(G, x, y);
     G.lastX = x; G.lastY = y;
   };
 
   A.onUp = function (G) {
+    // 在脸上快快地点一下（没拖动）：点鼻子
+    if (G.dragging && G.tool === 'pet' && now() - (G.downT || 0) < 0.3 && (G.downMoved || 0) < 2 &&
+        A.hitHead(G, G.downX, G.downY) && !(G.spr === 'sleep')) boop(G, G.downX, G.downY);
     G.dragging = false;
     // 摸 / 梳一次算一个动作；隔 3 秒才再算，免得连点刷分
     if ((G.petStroke > .4 || G.brushStroke > .4) && now() - (G.strokeBondT || 0) > 3) {
@@ -214,6 +268,16 @@ window.DOLL = window.DOLL || {};
     G.purr = Math.max(0, G.purr - dt * 0.8);
     if (D.Game.sandCd > 0) D.Game.sandCd -= dt;
     A.updateWand(G, dt);
+    // 慢眨眼：手停在猫脸上不动两秒，猫会对你慢慢眨一下眼（猫表示信任的方式），冒一颗小爱心
+    if (G.tool === 'pet' && G.mouseIn && !G.dragging) {
+      const cat = (D.Game.cats || []).find(c => A.hitHead(c, G.mouse.x, G.mouse.y) && c.spr !== 'sleep' && !c.hopping);
+      G.stillT = cat ? (G.stillT || 0) + dt : 0;
+      if (cat && G.stillT > 2) {
+        G.stillT = -8;                              // 隔一阵才会再眨
+        cat.slowBlink = 1.5;
+        FX.spawn('heart', cat.x + U.rnd(-3, 3), D.catBox(cat).y - 2, { vy: -7, g: 0.6, life: 1.6 });
+      }
+    } else G.stillT = 0;
     if (G.purr > 0.35) {
       G.purrT = (G.purrT || 0) - dt;
       if (G.purrT <= 0) {
@@ -245,6 +309,13 @@ window.DOLL = window.DOLL || {};
       return;
     }
 
+    if (G.tool === 'treat') {
+      // 捏着一块小鱼饼干
+      D.Scene.drawTreat(ctx, { x: x, y: y - 4, z: 0 }, false);
+      PX.rect(ctx, x - 3, y, 7, 4, '#E7B993'); PX.rect(ctx, x - 2, y + 4, 5, 2, '#D9A47E');
+      PX.rect(ctx, x - 4, y - 2, 2, 3, '#F6D8C0'); PX.rect(ctx, x + 3, y - 2, 2, 3, '#F6D8C0');
+      return;
+    }
     if (G.tool === 'brush') {
       const k = G.dragging ? (Math.floor(t * 14) % 2) : 0;
       PX.rect(ctx, x - 2, y + 1 + k, 4, 8, '#B5793F');

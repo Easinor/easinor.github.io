@@ -117,6 +117,28 @@ window.DOLL = window.DOLL || {};
     '...ooo.', '..odddo', '.oddddo', '.odddmo', '.odmmmo', 'odmmmo.', 'odmmmo.', 'odmmmmo',
     'odmmmmo', 'odmmmmo', '.odmmmo', '.odmmmo', '..odmmo', '.odmmo.', 'odmmo..', 'ommo...', 'oo.....'
   ];
+  // 用后腿站起来（讨零食、够高处的逗猫棒、庆祝）：身子比坐着瘦高，底下两只后脚，
+  // 两只前爪蜷在胸前（另外画，会一上一下地招手）
+  const REAR_BODY = [
+    '.....owwwwwwww',
+    '....omwwwwwwww',
+    '...ommwwwwwwww',
+    '...ommwwwwwwww',
+    '...ommcwwwwwww',
+    '...ommcwwwwwww',
+    '..ommmcwwwwwww',
+    '..ommmccwwwwww',
+    '..ommmccwwwwww',
+    '.ommmmcccwwwww',
+    '.ommmmcccwwwww',
+    '.ommmmccccwwww',
+    'ommmmmccccccww',
+    'ommmmcccccccww',
+    'ommmowwwwocccc',
+    '.oooowwwwooooo',
+    '....oooooo....'
+  ];
+  // 举在胸前的小爪子（爪尖朝下垂着）
   // 左边不描边：那一侧压在身子上，描了就是一道缝
   const LIE_CHEST = [
     '.ooooooooooo.',
@@ -287,13 +309,38 @@ window.DOLL = window.DOLL || {};
     const wear = (g, hx, hy) => (set[acc] || []).forEach(p => blit(g, p[0], hx + p[1], hy + p[2]));
     const whisk = (g, hx, hy) => { blit(g, WHISKER_L, hx - 5, hy + 10); blit(g, WHISKER_R, hx + 24, hy + 10); };
     let g, W, H, hx, hy;
-    if (pose === 'sit') {
-      W = 38; H = 25; g = grid(W, H); hx = 6; hy = 0;
+    if (pose === 'sit' || pose === 'groom') {
+      // groom = 坐着舔爪子：一只前爪举到嘴边，头一点一点地舔（frame 0 / 1），舔的那一下吐一点舌头
+      const lick = pose === 'groom', f = frame & 1;
+      W = 38; H = 25; g = grid(W, H); hx = 6; hy = lick && f ? 1 : 0;
       blit(g, SIT_TAIL, 30, 6);
       blit(g, mirror(SIT_BODY), 4, 12);
       blit(g, head(mood), hx, hy);
       wear(g, hx, hy); whisk(g, hx, hy);
+      if (lick) {
+        // 端坐时身前那两条就是前爪。舔的是其中一只：把右边那只从地上拿走（原来的位置补成胸口的毛），
+        // 再画一条同样粗细的前腿从胸口抬到嘴边，爪尖朝上
+        for (let y = 20; y <= 22; y++) for (let x = 19; x <= 23; x++) g[y][x] = 'c';
+        const top = hy + 13;
+        blit(g, ['.ooo.'], hx + 12, top);
+        for (let y = top + 1; y <= 19; y++) blit(g, ['owwwo'], hx + 12, y);
+        if (f) g[top][hx + 11] = 'q';          // 舔的那一下吐一点舌头
+      }
       shadow(g, 7, 33, 24);
+    } else if (pose === 'rear') {
+      // 用后腿站起来：frame 0 / 1 两只前爪一高一低地招（frame < 0 就并排举着不动）
+      W = 38; H = 30; g = grid(W, H); hx = 6; hy = 0;
+      blit(g, SIT_TAIL, 30, 11);
+      blit(g, mirror(REAR_BODY), 4, 12);
+      // 两条前腿从肩膀垂在胸前、爪子蜷着（先画腿、再画头：腿的上端被下巴压住，看着是从肩膀长出来的）
+      const up = frame < 0 ? [0, 0] : (frame & 1) ? [-1, 1] : [1, -1];
+      [[hx + 4, up[0]], [hx + 15, up[1]]].forEach(([ax, d]) => {
+        for (let y = 14; y <= 20 + d; y++) blit(g, ['owwwo'], ax, y);
+        blit(g, ['.ooo.'], ax, 21 + d);
+      });
+      blit(g, head(mood), hx, hy);
+      wear(g, hx, hy); whisk(g, hx, hy);
+      shadow(g, 7, 33, 29);
     } else if (pose === 'lie') {
       W = 62; H = 23; g = grid(W, H); hx = 32; hy = 0;
       blit(g, LIE_TAIL, 3, 16);
@@ -302,7 +349,8 @@ window.DOLL = window.DOLL || {};
       blit(g, LIE_CHEST, 36, 14);
       blit(g, head(mood), hx, hy);
       // 两只小前爪平放在地上、领结底下；领子 / 围巾最后画，压在下巴底下那一圈
-      blit(g, SMALL_PAW, hx + 6, 19); blit(g, SMALL_PAW, hx + 13, 19);
+      // 踩奶（frame 0 / 1）：两只前爪轮流抬起来一格再按下去
+      blit(g, SMALL_PAW, hx + 6, frame === 0 ? 18 : 19); blit(g, SMALL_PAW, hx + 13, frame === 1 ? 18 : 19);
       wear(g, hx, hy); whisk(g, hx, hy);
       shadow(g, 2, 56, 22);
     } else if (pose === 'crouch') {
@@ -472,9 +520,10 @@ window.DOLL = window.DOLL || {};
 
   // 游戏里的姿势 → 新猫的四种身形
   const POSE_MAP = {
-    sit: 'sit', gaze: 'sit', groom: 'sit', reach: 'sit',
-    loaf: 'lie', rollover: 'belly', belly: 'belly',
-    stand: 'stand', walk: 'stand', crouch: 'crouch', eatLow: 'crouch', stretch: 'stand', eat: 'stand',
+    sit: 'sit', gaze: 'sit', groom: 'groom', reach: 'rear', rear: 'rear',
+    loaf: 'lie', knead: 'lie', rollover: 'belly', belly: 'belly',
+    // stretch = 伸懒腰：前半身压低、屁股翘高，正好是蹲伏那一套身子（不扭）
+    stand: 'stand', walk: 'stand', crouch: 'crouch', eatLow: 'crouch', stretch: 'crouch', eat: 'stand',
     sleep: 'sleep'
   };
   function moodOf(ov) {
@@ -495,6 +544,9 @@ window.DOLL = window.DOLL || {};
     let frame = 0;
     if (pose === 'stand') frame = G.gait ? (Math.floor((G.gaitPhase || 0) * 4) & 3) : -1;
     else if (pose === 'crouch') frame = G.wiggle && G.spr === 'crouch' ? (Math.floor((G.t || 0) * 9) & 3) : -1;   // 扭屁股 + 甩尾巴
+    else if (pose === 'groom') frame = Math.floor((G.t || 0) * 5) & 1;                    // 舔爪子
+    else if (pose === 'rear') frame = G.wave ? (Math.floor((G.t || 0) * 6) & 1) : -1;      // 招手
+    else if (pose === 'lie') frame = G.spr === 'knead' ? (Math.floor((G.t || 0) * 3.2) & 1) : -1;   // 踩奶
     return get(G.catId, pose, moodOf(G.eyeOv), accOf(G.catId), frame, G.spr === 'eat');
   }
   // 精灵左上角（游戏坐标）：脚下中心对准 G.x，最底一行（影子）落在 G.y
@@ -503,23 +555,48 @@ window.DOLL = window.DOLL || {};
     return { x: Math.round(G.x - (it.W * K) / 2), y: Math.round(G.y - (G.lift || 0) - it.H * K), flip };
   }
 
+  // 逆光的亮边：这一帧每一列最顶上的那个像素（头顶、耳朵尖、背、尾巴的上沿）换成光的颜色
+  function rimOf(it, col) {
+    it.rims = it.rims || {};
+    if (it.rims[col]) return it.rims[col];
+    const cv = document.createElement('canvas');
+    cv.width = it.W; cv.height = it.H;
+    const c = cv.getContext('2d');
+    c.fillStyle = col;
+    for (let x = 0; x < it.W; x++) {
+      for (let y = 0; y < it.H; y++) {
+        const ch = it.rows[y][x];
+        if (ch !== '.' && ch !== 'x') { c.fillRect(x, y, 1, 1); break; }
+      }
+    }
+    it.rims[col] = cv;
+    return cv;
+  }
+
   D.drawCat = function (ctx, G) {
     const it = current(G);
     const o = origin(G, it);
+    const sil = !!(D.Scene && D.Scene.silhouette);
+    // 站在窗户照进来的光里：光从背后来，身前（靠近我们这边）的地板上拖一道影子
+    if (G.rim && !sil && !G.onPerch && !G.noShadow) D.PX.ellipse(ctx, Math.round(G.x), Math.round(G.y) + 2, it.W > 40 ? 22 : 13, 3, 'rgba(58,42,64,.20)');
     // 脚下的椭圆影子：贴在地上不跟着跳，跳得越高越小越淡
     const up = Math.max(0, (G.lift || 0) + (G.hopping && G.hopFrom ? Math.sin(Math.min(1, G.hopT || 0) * Math.PI) * 7 : 0));
     const k = Math.max(0.45, 1 - up / 14);
     const rx = Math.round((it.W > 40 ? 23 : 13) * K * k), ry = Math.max(1, Math.round(2.5 * K * k));
     const gy = Math.round(G.y - 1 + (G.hopping && G.hopFrom ? up : 0));
-    D.PX.ellipse(ctx, Math.round(G.x), gy, rx, ry, 'rgba(58,42,64,' + (0.28 * k).toFixed(2) + ')');
+    if (!G.noShadow && !(D.Scene && D.Scene.silhouette)) D.PX.ellipse(ctx, Math.round(G.x), gy, rx, ry, 'rgba(58,42,64,' + (0.28 * k).toFixed(2) + ')');
+    // sink：身子底下这么多行不画（窝在纸箱里往下缩的时候，缩下去的那一截被箱子挡住）
+    const vh = Math.max(1, it.H - Math.max(0, Math.round(G.sink || 0)));
     if (o.flip) {
       ctx.save();
       ctx.translate(o.x * 2 + it.W * K, 0);
       ctx.scale(-1, 1);
-      ctx.drawImage(it.cv, o.x, o.y, it.W * K, it.H * K);
+      ctx.drawImage(it.cv, 0, 0, it.W, vh, o.x, o.y, it.W * K, vh * K);
+      if (G.rim && !sil) ctx.drawImage(rimOf(it, G.rim), 0, 0, it.W, vh, o.x, o.y, it.W * K, vh * K);
       ctx.restore();
     } else {
-      ctx.drawImage(it.cv, o.x, o.y, it.W * K, it.H * K);
+      ctx.drawImage(it.cv, 0, 0, it.W, vh, o.x, o.y, it.W * K, vh * K);
+      if (G.rim && !sil) ctx.drawImage(rimOf(it, G.rim), 0, 0, it.W, vh, o.x, o.y, it.W * K, vh * K);
     }
   };
 
