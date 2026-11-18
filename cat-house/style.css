@@ -1,0 +1,187 @@
+:root {
+  --ink: #4A3B52;
+  --ink-soft: #867292;
+  --card: #FFFBF4;
+  --edge: #6B5A72;
+  --edge-soft: #C9B6C6;
+  --accent: #C9809E;
+  --luna: #6E7CAE;
+  --nova: #D4883F;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #2B2435;
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, Segoe UI, sans-serif;
+  color: var(--ink);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+#stage {
+  position: fixed; inset: 0;
+  width: 100%; height: 100%;
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+body.tool-active #stage { cursor: none; }
+
+/* 像素风面板：硬边 + 两层描边，不用模糊 */
+.panel, .chip, #dock, .pick, #levelup {
+  background: var(--card);
+  border: 2px solid var(--edge);
+  border-radius: 0;
+  box-shadow: 3px 3px 0 rgba(75, 59, 82, .25);
+}
+
+/* ---------- 左上：猫卡片 + 数值 ---------- */
+#hud {
+  position: fixed; left: 14px; top: 14px;
+  display: flex; flex-direction: column; gap: 9px;
+  z-index: 5;
+}
+.panel { padding: 9px 11px; }
+#catcard.panel { padding: 6px; }
+
+#catcard { display: flex; gap: 10px; align-items: center; }
+.cc-pic {
+  flex: none; width: 52px; height: 34px;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: #F1E6DA;
+  border: 2px solid var(--edge-soft);
+  overflow: hidden;
+}
+.cc-pic canvas { display: block; }
+.cc-name { font-size: 15px; font-weight: 800; letter-spacing: .4px; display: flex; align-items: baseline; gap: 5px; }
+.cc-name small { font-size: 11px; font-weight: 500; color: var(--ink-soft); letter-spacing: 0; }
+.cc-breed { font-size: 11px; font-weight: 700; margin-top: 1px; }
+.cc-lv { margin-top: 5px; font-size: 10.5px; color: var(--ink-soft); display: flex; justify-content: space-between; }
+.cc-bar { height: 6px; background: #E6DCE4; border: 1px solid var(--edge-soft); margin-top: 3px; }
+.cc-bar i { display: block; height: 100%; background: #D08FAC; transition: width .4s steps(8); }
+
+.stat { display: flex; align-items: center; gap: 7px; margin: 6px 0; }
+.stat:first-child { margin-top: 1px; }
+.stat:last-child { margin-bottom: 1px; }
+.stat b { font-size: 11.5px; font-weight: 700; width: 30px; flex: none; color: var(--ink-soft); }
+.stat .bar { flex: 1; height: 9px; background: #E6DCE4; border: 1px solid var(--edge-soft); }
+.stat .bar i { display: block; height: 100%; transition: width .4s steps(8); }
+.stat em { font-size: 10.5px; font-style: normal; color: var(--ink-soft); width: 22px; text-align: right; flex: none; }
+
+
+/* ---------- 右上：小开关 ---------- */
+#tools-top {
+  position: fixed; right: 14px; top: 14px;
+  display: flex; gap: 6px; z-index: 5;
+}
+.chip {
+  padding: 6px 11px;
+  font: 700 12px/1 inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.chip:hover { background: #FFF3E4; }
+.chip:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 rgba(75, 59, 82, .25); }
+.chip.on { background: #F4E0EA; }
+
+/* ---------- 底部：动作栏 ---------- */
+#dock {
+  position: fixed; left: 50%; bottom: 18px;
+  transform: translateX(-50%);
+  display: flex; gap: 4px;
+  padding: 7px 8px;
+  z-index: 5;
+}
+.act {
+  width: 68px;
+  border: 2px solid transparent;
+  background: transparent;
+  padding: 5px 2px 4px;
+  cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  color: var(--ink);
+  font: 700 11.5px/1 inherit;
+}
+.act canvas { display: block; }
+.act span { white-space: nowrap; }
+.act kbd {
+  font: 700 9px/1 inherit; color: var(--ink-soft);
+  background: #EEE4EC; border: 1px solid var(--edge-soft); padding: 2px 4px;
+}
+.act:hover { background: #FBEDF3; }
+.act.on { background: #F4DFEA; border-color: var(--accent); }
+.act.on kbd { background: #E7C6D6; color: #8E5872; }
+
+/* ---------- 选猫 ---------- */
+#chooser {
+  position: fixed; inset: 0; z-index: 40;
+  background: #EADCE4;
+  background-image:
+    linear-gradient(45deg, rgba(255, 255, 255, .35) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, .35) 75%),
+    linear-gradient(45deg, rgba(255, 255, 255, .35) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, .35) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 22px;
+}
+#chooser.hide { display: none; }
+#chooser h1 { margin: 0; font-size: 24px; letter-spacing: 2px; font-weight: 800; }
+#chooser p.sub { margin: -14px 0 0; font-size: 12.5px; color: var(--ink-soft); }
+.picks { display: flex; gap: 20px; }
+.pick {
+  width: 224px;
+  padding: 14px 15px 16px;
+  cursor: pointer;
+  text-align: center;
+}
+.pick:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 rgba(75, 59, 82, .25); }
+.pick-pic {
+  height: 164px;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: #F3E7DB;
+  border: 2px solid var(--edge-soft);
+  margin-bottom: 9px;
+  padding-bottom: 4px;
+}
+.pick h2 { margin: 2px 0 1px; font-size: 18px; font-weight: 800; }
+.pick h2 small { font-size: 12px; color: var(--ink-soft); font-weight: 500; margin-left: 5px; }
+.pick .breed { font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.pick .desc { font-size: 11.5px; line-height: 1.65; color: var(--ink-soft); min-height: 56px; }
+.pick-lv { justify-content: center; gap: 8px; }
+.pick[data-id=luna] .breed { color: var(--luna); }
+.pick[data-id=nova] .breed { color: var(--nova); }
+.pick[data-id=luna]:hover { border-color: var(--luna); }
+.pick[data-id=nova]:hover { border-color: var(--nova); }
+
+/* ---------- 升级横幅 ---------- */
+#levelup {
+  position: fixed; left: 50%; top: 76px; transform: translate(-50%, -10px);
+  background: #FFF0DA;
+  padding: 10px 20px;
+  font-size: 13px; font-weight: 800;
+  opacity: 0; pointer-events: none; z-index: 30;
+  transition: opacity .25s steps(4), transform .25s steps(4);
+}
+#levelup.show { opacity: 1; transform: translate(-50%, 0); }
+#levelup small { display: block; font-weight: 500; font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+
+/* ---------- 桌宠模式 ---------- */
+body.mini #hud, body.mini #tools-top { display: none; }
+body.mini #dock {
+  bottom: 6px; gap: 2px; padding: 4px 5px;
+  opacity: .2; transition: opacity .2s;
+}
+body.mini #dock:hover { opacity: 1; }
+body.mini .act { width: 38px; font-size: 0; gap: 0; padding: 3px 1px; }
+body.mini .act kbd { display: none; }
+#miniback {
+  position: fixed; right: 8px; top: 8px; z-index: 6;
+  display: none; opacity: .25; transition: opacity .2s;
+}
+body.mini #miniback { display: block; }
+#miniback:hover { opacity: 1; }

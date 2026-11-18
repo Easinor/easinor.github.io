@@ -1,0 +1,43 @@
+---
+layout: default
+title: "My Cats"
+permalink: /cats/
+author_profile: false
+---
+
+<style>
+  /* The game is a full-viewport canvas app, so it gets everything below the site header. */
+  .cat-house-frame {
+    position: fixed;
+    top: 70px;
+    left: 0;
+    width: 100%;
+    height: calc(100vh - 70px);
+    height: calc(100dvh - 70px);
+    border: 0;
+    z-index: 10;
+    background: #2B2435;
+  }
+  .page__footer { display: none; }
+</style>
+
+<iframe class="cat-house-frame" id="cat-house-frame"
+        src="{{ "/cat-house/index.html" | relative_url }}"
+        title="Cat House · Luna &amp; Nova"></iframe>
+
+<script>
+  (function () {
+    var frame = document.getElementById('cat-house-frame');
+    var head = document.querySelector('.masthead');
+    function fit() {
+      if (!head) return;
+      var h = Math.round(head.getBoundingClientRect().height);
+      frame.style.top = h + 'px';
+      frame.style.height = (window.innerHeight - h) + 'px';
+    }
+    fit();
+    window.addEventListener('resize', fit);
+    window.addEventListener('load', fit);
+    frame.addEventListener('load', function () { frame.contentWindow.focus(); });
+  })();
+</script>
