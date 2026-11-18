@@ -40,12 +40,10 @@ window.DOLL = window.DOLL || {};
   };
   St.LEVEL_TITLES = ['First Meeting', 'Familiar Face', 'Comes Closer', 'Cuddle Buddy', 'Personal Scooper', 'Inseparable', 'In Sync', 'Best Friends', 'For Life', 'Meant to Be'];
 
-  St.addBond = function (n) {
-    const c = St.cur();
-    const before = St.level(c.bond);
-    c.bond = Math.max(0, c.bond + n);
-    const after = St.level(c.bond);
-    return after > before ? after : 0;
+  // 亲密度现在跟着账号走、两只猫共用（见 account.js）：每个动作固定 +5，升级提示由账号那边发
+  St.addBond = function () {
+    if (D.Account) D.Account.addAction();
+    return 0;
   };
 
   // 综合心情：由其它数值拖拽

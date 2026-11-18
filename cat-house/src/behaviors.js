@@ -165,21 +165,30 @@ window.DOLL = window.DOLL || {};
     }
   };
 
+  // 饭碗 / 水碗左右这么宽的范围里不趴、不睡：趴着的身子很长，会压在碗和餐垫上，看着像悬空
+  const BOWL_CLEAR = 76;
+  const LIE_DOWN = { sleep: 1, loaf: 1 };
+
   B.wander = {
-    spr: 'stand', dur: [4, 9], walking: true,
+    spr: 'stand', dur: [4, 14], walking: true,
     enter(G) {
       G.walkTo = U.rnd(22, G.L.W - 22);
       // 刚吃完 / 喝完：至少走开一个身位以上，别停在碗边挡着另一只
       if (G.leaveBowl) {
         G.leaveBowl = false;
-        for (let i = 0; i < 8 && Math.abs(G.walkTo - G.L.bowl.x) < 60; i++) G.walkTo = U.rnd(22, G.L.W - 22);
+        for (let i = 0; i < 12 && Math.abs(G.walkTo - G.L.bowl.x) < BOWL_CLEAR + 6; i++) G.walkTo = U.rnd(22, G.L.W - 22);
       }
       G.goY = AI.randFloorY(G.L);                 // 往房间里任意一处走：左右 + 前后
       G.facing = G.walkTo > G.x ? 1 : -1;
     },
     update(G, dt) {
       const d = G.walkTo - G.x;
-      if (arrived(G, d, 1.5)) { G.behDone = true; return; }
+      if (arrived(G, d, 1.5)) {
+        // 是为了躲开碗边才走过来的：到了就接着做原本想做的事（趴下 / 睡觉）
+        const next = G.thenBeh; G.thenBeh = null;
+        if (next) { G.noDodge = true; AI.start(G, next); G.noDodge = false; } else G.behDone = true;
+        return;
+      }
       step(G, Math.sign(d) * Math.min(Math.abs(d), 19 * dt), 'walk');
       cs(G).energy = U.clamp(cs(G).energy - 0.25 * dt, 0, 100);
     }
@@ -360,7 +369,6 @@ window.DOLL = window.DOLL || {};
       if (bowl.fill <= 0) {
         bowl.fill = 0;
         c.meals++;
-        St.addBond(4);
         say(G, U.pick(['All full~', 'Yummy!', 'That hit the spot']), { dur: 2 });
         FX.spawn('sparkle', G.x, G.y - 26, { n: 5, spread: 6, life: 1 });
         G.wantEat = false;
@@ -437,7 +445,7 @@ window.DOLL = window.DOLL || {};
         FX.spawn('heart', G.x, G.y - 30, { vy: -9, g: 0.8, life: 1.5 });
         say(G, U.pick(['Got it!', "It's mine now!", 'Hmph~ caught you!']), { dur: 1.8 });
         c.mood = U.clamp(c.mood + 6, 0, 100);
-        c.bond += 2;
+        St.addBond();   // 逗猫棒：抓到一次算一个动作
         D.Game.wandHits++;
         return;
       }
@@ -923,7 +931,16 @@ window.DOLL = window.DOLL || {};
     } else {
       // 头碰头：两只趴在同一条线上，左边那只朝右、右边那只朝左，
       // 脑袋在中间挨着（睡姿的脸离精灵中心 24 像素，各让 1 像素就贴上了），身子往两边伸
-      const mid = U.clamp(Math.round((A.x + Bc.x) / 2), 56, L.W - 56);
+      let mid = U.clamp(Math.round((A.x + Bc.x) / 2), 56, L.W - 56);
+      // 两只头碰头占的地方更宽：碰头点离碗太近就挪到碗的一侧去（哪边放得下去哪边）
+      const clear = BOWL_CLEAR + 24;
+      if (Math.abs(mid - L.bowl.x) < clear) {
+        const left = L.bowl.x - clear, right = L.bowl.x + clear;
+        const okL = left >= 56, okR = right <= L.W - 56;
+        if (okL && okR) mid = Math.abs(mid - left) <= Math.abs(mid - right) ? left : right;
+        else if (okR) mid = right;
+        else if (okL) mid = left;
+      }
       const leftCat = A.x <= Bc.x ? A : Bc, rightCat = leftCat === A ? Bc : A;
       leftCat.pairX = mid - 23; leftCat.pairFace = 1;
       rightCat.pairX = mid + 23; rightCat.pairFace = -1;
@@ -940,7 +957,8 @@ window.DOLL = window.DOLL || {};
   function pairPartner(G) {
     if (!(D.Game && D.Game.showScene)) return null;
     const o = otherCats(G)[0];
-    if (!o || !o.beh || !PAIR_OK_BEH[o.beh.name] || o.hopping || o.pairWith) return null;
+    // 对方在高处（爬架 / 窗台）就不去叫她下来
+    if (!o || !o.beh || !PAIR_OK_BEH[o.beh.name] || o.hopping || o.pairWith || o.onPerch) return null;
     if (o === D.Game.G && D.Game.G.paused) return null;
     return o;
   }
@@ -972,6 +990,8 @@ window.DOLL = window.DOLL || {};
       if (c.mood > 45 && G.sinceTouch > 25) w.wantpet = 6 + Math.min(20, (G.sinceTouch - 25) * .3);
       const fed = D.Game && D.Game.bowl && D.Game.bowl.fill > 0.05;   // 碗里有饭就下来吃
       if (fed || (c.litter > 25 && G.sinceLitter > 90)) w.hopDown += 30;
+      // 刚上来先待一会儿（Luna 至少 45 秒），别一落脚就又跳下去
+      if ((G.perchT || 0) < 45 * P.stayUp) w.hopDown = 0;
     } else {
       w = {
         sit: P.sit, loaf: P.loaf, gaze: P.gaze, groom: P.groom, wander: P.wander, stretch: 6,
@@ -994,7 +1014,8 @@ window.DOLL = window.DOLL || {};
     }
     if (c.coat < 60) w.groom += (60 - c.coat) * 0.35;
     // 两只一起：心情好就去找对方舔毛，困了就挨着睡
-    const partner = pairPartner(G);
+    // 在高处的时候不发起：不然刚爬上爬架就会被「挨着睡」拽下来（困了就在上面睡）
+    const partner = G.onPerch ? null : pairPartner(G);
     if (partner) {
       const oc = cs(partner);
       w.pairGroom = (c.mood > 40 && oc.mood > 30) ? 9 : 2;
@@ -1016,6 +1037,11 @@ window.DOLL = window.DOLL || {};
 
   AI.start = function (G, name) {
     if (G.onPerch && NEEDS_FLOOR[name]) { G.afterHop = name; name = 'hopDown'; }
+    // 在碗边想趴下 / 睡觉：先走开，到了别处再趴
+    if (LIE_DOWN[name] && !G.noDodge && !G.onPerch && !G.inWheel && G.L && G.L.bowl &&
+        D.Game && D.Game.showScene && Math.abs(G.x - G.L.bowl.x) < BOWL_CLEAR) {
+      G.thenBeh = name; G.leaveBowl = true; name = 'wander';
+    } else if (name !== 'wander') G.thenBeh = null;
     const b = B[name];
     if (!b) return;
     const prev = G.beh && B[G.beh.name];
@@ -1035,6 +1061,7 @@ window.DOLL = window.DOLL || {};
     if (!G.beh) { AI.start(G, 'sit'); return; }
     const b = B[G.beh.name];
     G.beh.t += dt;
+    G.perchT = G.onPerch ? (G.perchT || 0) + dt : 0;   // 在高处已经待了多久
     G.walking = !!b.walking;
     if (b.update) b.update(G, dt);
     if (G.behDone || G.beh.t >= G.beh.dur) AI.start(G, AI.choose(G));

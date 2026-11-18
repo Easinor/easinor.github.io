@@ -95,6 +95,14 @@ window.DOLL = window.DOLL || {};
     D.Act.setTool(G, (G.tool === id && id !== 'pet') ? 'pet' : id);
   };
 
+  // 吊灯开 / 关：直接点屋里那盏灯。不算照顾猫的动作，不加亲密度
+  UI.toggleLamp = function () {
+    St.settings.lamp = !St.settings.lamp;
+    St.save();
+    const L = D.Game.G.L, lp = D.Scene.lampPos(L);
+    D.FX.toast(St.settings.lamp ? 'Light on' : 'Light off', lp.x, lp.y + 14, '#B8894A');
+  };
+
   UI.flash = function (id) {
     const a = actCtxs.find(a => a.id === id);
     if (a && a.el.animate) a.el.animate([{ transform: 'translateY(-3px)' }, { transform: 'none' }], { duration: 220, easing: 'steps(3)' });
@@ -108,11 +116,97 @@ window.DOLL = window.DOLL || {};
 
   // ---------- 右上开关 ----------
   function buildTop() {
-    // 右上角的按钮全拿掉了：装扮改成点墙上那只猫的照片来换
+    // 右上角只留一个账号按钮（装扮改成点墙上那只猫的照片来换）
     const el = document.getElementById('tools-top');
     el.innerHTML = '';
-    el.style.display = 'none';
     document.getElementById('miniback').onclick = () => UI.setMini(false);
+    const Acc = D.Account;
+    if (!Acc) { el.style.display = 'none'; return; }
+    // 亲密度进度条：两只猫共用一条，登录了才显示
+    bondEl = document.createElement('div');
+    bondEl.className = 'panel';
+    bondEl.id = 'bondbar';
+    bondEl.innerHTML = '<div class="bb-top"><b id="bb-lv"></b><span id="bb-title"></span><em id="bb-num"></em></div>' +
+      '<div class="cc-bar"><i id="bb-fill"></i></div>';
+    bondEl.title = 'Bond with Luna & Nova: +1 every 5 seconds here, +5 for each action below';
+    el.appendChild(bondEl);
+    accBtn = document.createElement('button');
+    accBtn.className = 'chip';
+    accBtn.addEventListener('click', () => {
+      const p = document.getElementById('account');
+      p.classList.toggle('show');
+      if (p.classList.contains('show')) renderAccount();
+    });
+    el.appendChild(accBtn);
+    Acc.onMilestone = (h) => UI.banner(h + (h === 1 ? ' hour' : ' hours') + ' together',
+      'Luna and Nova feel closer to you');
+    Acc.onLevelUp = (lv, title, newTitle) => UI.banner('Bond Lv.' + lv + ' · ' + title,
+      lv >= 10 ? 'Max level — you, Luna and Nova are family' : 'New title! You, Luna and Nova grew a little closer');
+    // 登录状态在后台变了（取回了服务器上的进度 / 令牌失效被登出）：按钮和面板跟着刷新
+    Acc.onChange = () => {
+      refreshAccBtn();
+      if (document.getElementById('account').classList.contains('show')) renderAccount();
+    };
+    refreshAccBtn();
+  }
+
+  // ---------- 账号面板 ----------
+  let accBtn = null, bondEl = null, accT = 0;
+  const esc = (s) => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  function refreshAccBtn() {
+    if (!accBtn) return;
+    const u = D.Account.user();
+    accBtn.textContent = u ? u.id + ' · ' + D.Account.fmt(u.seconds || 0) : 'Sign in';
+    bondEl.style.display = u ? '' : 'none';
+    if (!u) return;
+    const b = D.Account.bondInfo();
+    document.getElementById('bb-lv').textContent = 'Lv.' + b.lv;
+    document.getElementById('bb-title').textContent = b.title;
+    document.getElementById('bb-num').textContent = b.max ? 'MAX' : b.cur + ' / ' + b.need;
+    document.getElementById('bb-fill').style.width = (b.cur / b.need * 100) + '%';
+  }
+  function renderAccount(msg) {
+    const Acc = D.Account, p = document.getElementById('account'), u = Acc.user();
+    if (!u) {
+      p.innerHTML =
+        '<h3>Your ID</h3>' +
+        '<p class="hint">Sign in and the time you spend here builds your bond with both cats. A new ID is registered automatically.</p>' +
+        '<form><input id="acc-id" placeholder="ID" maxlength="20" autocomplete="username">' +
+        '<input id="acc-pw" type="password" placeholder="Password" autocomplete="current-password">' +
+        '<div class="err">' + esc(msg || '') + '</div>' +
+        '<button class="chip" type="submit">Sign in / Register</button></form>' +
+        '<p class="hint">Your progress follows your ID to any device.</p>';
+      p.querySelector('form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = p.querySelector('button[type=submit]');
+        if (btn.disabled) return;
+        btn.disabled = true; btn.textContent = 'Signing in…';
+        const r = await Acc.signIn(p.querySelector('#acc-id').value, p.querySelector('#acc-pw').value);
+        if (!r.ok) {
+          btn.disabled = false; btn.textContent = 'Sign in / Register';
+          p.querySelector('.err').textContent = r.error;
+          return;
+        }
+        refreshAccBtn();
+        renderAccount();
+        UI.banner(r.created ? 'Welcome, ' + esc(Acc.user().id) : 'Welcome back, ' + esc(Acc.user().id),
+          'Time spent here now counts toward your bond');
+      });
+      return;
+    }
+    const sec = u.seconds || 0, h = sec / 3600;
+    const next = Acc.MILESTONES.find(m => h < m);
+    const b = Acc.bondInfo();
+    p.innerHTML =
+      '<h3>' + esc(u.id) + '</h3>' +
+      '<div class="row"><b>Time together</b><span id="acc-time">' + Acc.fmt(sec) + '</span></div>' +
+      '<div class="row"><b>Bond</b><span>Lv.' + b.lv + ' · ' + b.title + '</span></div>' +
+      '<p class="hint">+1 every 5 seconds here, +5 for each action. A new title every level, up to Lv.10.</p>' +
+      '<div class="miles">' + Acc.MILESTONES.map(m =>
+        '<i class="' + (h >= m ? 'got' : '') + '">' + m + 'h</i>').join('') + '</div>' +
+      '<p class="hint">' + (next ? 'Next milestone: ' + next + 'h' : 'All milestones reached') + '</p>' +
+      '<button class="chip" id="acc-out">Sign out</button>';
+    p.querySelector('#acc-out').addEventListener('click', () => { Acc.signOut(); refreshAccBtn(); renderAccount(); });
   }
 
   // 给某只猫换下一套装扮（每只猫各戴各的），返回新装扮的名字
@@ -171,13 +265,16 @@ window.DOLL = window.DOLL || {};
 
   // ---------- 升级 ----------
   let lvTimer = null;
-  UI.levelUp = function (lv) {
+  UI.banner = function (title, sub) {
     const el = document.getElementById('levelup');
-    el.innerHTML = 'Bond Lv.' + lv + ' · ' + St.LEVEL_TITLES[lv - 1] +
-      '<small>You and ' + D.CATS[St.cat].name + ' grew a little closer</small>';
+    el.innerHTML = title + (sub ? '<small>' + sub + '</small>' : '');
     el.classList.add('show');
     clearTimeout(lvTimer);
     lvTimer = setTimeout(() => el.classList.remove('show'), 3200);
+  };
+  UI.levelUp = function (lv, catId) {
+    UI.banner('Bond Lv.' + lv + ' · ' + St.LEVEL_TITLES[lv - 1],
+      'You and ' + D.CATS[catId || St.cat].name + ' grew a little closer');
   };
 
   // ---------- 每帧刷新 ----------
@@ -190,6 +287,15 @@ window.DOLL = window.DOLL || {};
       lvt.textContent = 'Lv.' + lv + ' ' + St.LEVEL_TITLES[lv - 1];
       document.getElementById('lvnum').textContent = Math.floor(c.bond);
       document.getElementById('lvbar').style.width = (St.levelProgress(c.bond) * 100) + '%';
+    }
+
+    // 账号按钮上的时长和亲密度进度条一秒刷几次；面板开着就把里面的时长也刷一下
+    accT += dt;
+    if (accT >= 0.25 && accBtn) {
+      accT = 0;
+      refreshAccBtn();
+      const tm = document.getElementById('acc-time');
+      if (tm && D.Account.user()) tm.textContent = D.Account.fmt(D.Account.seconds());
     }
 
     portraitT += dt;

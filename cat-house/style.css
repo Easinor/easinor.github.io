@@ -89,6 +89,46 @@ body.tool-active #stage { cursor: none; }
 .chip:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 rgba(75, 59, 82, .25); }
 .chip.on { background: #F4E0EA; }
 
+/* ---------- 右上：亲密度进度条 ---------- */
+#tools-top { align-items: stretch; }
+#bondbar { width: 210px; padding: 5px 9px 6px; font-size: 11px; }
+#bondbar .bb-top { display: flex; align-items: baseline; gap: 6px; }
+#bondbar b { font-weight: 800; color: var(--accent); }
+#bondbar span { flex: 1; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#bondbar em { font-style: normal; font-size: 10px; color: var(--ink-soft); }
+#bondbar .cc-bar { margin-top: 3px; }
+
+/* ---------- 右上：账号面板 ---------- */
+#account {
+  position: fixed; right: 14px; top: 50px; z-index: 6;
+  width: 230px; padding: 12px 13px;
+  display: none;
+  font-size: 12px;
+}
+#account.show { display: block; }
+#account h3 { margin: 0 0 6px; font-size: 14px; font-weight: 800; }
+#account .hint { margin: 6px 0; font-size: 11px; line-height: 1.5; color: var(--ink-soft); }
+#account form { display: flex; flex-direction: column; gap: 6px; }
+#account input {
+  font: 500 12px/1 inherit; color: var(--ink);
+  padding: 7px 8px; background: #fff;
+  border: 2px solid var(--edge-soft); border-radius: 0; outline: none;
+  user-select: text; -webkit-user-select: text;
+}
+#account input:focus { border-color: var(--accent); }
+#account .err { min-height: 14px; font-size: 11px; color: #C2506E; }
+#account .row { display: flex; justify-content: space-between; gap: 8px; margin: 5px 0; }
+#account .row span { color: var(--ink-soft); text-align: right; }
+#account .miles { display: flex; gap: 5px; margin: 9px 0 2px; }
+#account .miles i {
+  flex: 1; text-align: center; padding: 5px 0;
+  font-style: normal; font-weight: 700; font-size: 11px;
+  color: var(--ink-soft); background: #EEE4EC; border: 1px solid var(--edge-soft);
+}
+#account .miles i.got { color: #fff; background: var(--accent); border-color: var(--accent); }
+#account .chip { width: 100%; margin-top: 4px; }
+body.mini #account { display: none; }
+
 /* ---------- 底部：动作栏 ---------- */
 #dock {
   position: fixed; left: 50%; bottom: 18px;
@@ -130,7 +170,7 @@ body.tool-active #stage { cursor: none; }
   gap: 22px;
 }
 #chooser.hide { display: none; }
-#chooser h1 { margin: 0; font-size: 24px; letter-spacing: 2px; font-weight: 800; }
+#chooser h1 { margin: 0; padding: 0 24px; font-size: 24px; letter-spacing: 1px; font-weight: 800; text-align: center; }
 #chooser p.sub { margin: -14px 0 0; font-size: 12.5px; color: var(--ink-soft); }
 .picks { display: flex; gap: 20px; }
 .pick {

@@ -63,6 +63,7 @@ window.DOLL = window.DOLL || {};
     FX.spawn('sparkle', fx, G.L.bowl.y - 6, { n: 3, spread: 5, life: .9 });
     FX.toast('+ Food', fx, G.L.bowl.y - 12, '#B8763C');
     callCats('goEat');
+    St.addBond();
     G.sinceTouch = 0;
   };
 
@@ -77,6 +78,7 @@ window.DOLL = window.DOLL || {};
     FX.spawn('sparkle', bx, by, { n: 6, spread: 6, life: .9, color: '#8EC3E6' });
     FX.toast('+ Water', bx, by - 4, '#4F8DC0');
     callCats('goDrink');
+    St.addBond();
     G.sinceTouch = 0;
   };
 
@@ -199,9 +201,10 @@ window.DOLL = window.DOLL || {};
 
   A.onUp = function (G) {
     G.dragging = false;
-    if (G.petStroke > .4 || G.brushStroke > .4) {
-      const lv = St.addBond(1);
-      if (lv) D.UI.levelUp(lv);
+    // 摸 / 梳一次算一个动作；隔 3 秒才再算，免得连点刷分
+    if ((G.petStroke > .4 || G.brushStroke > .4) && now() - (G.strokeBondT || 0) > 3) {
+      G.strokeBondT = now();
+      St.addBond();
     }
   };
 

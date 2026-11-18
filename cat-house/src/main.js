@@ -143,10 +143,9 @@ window.DOLL = window.DOLL || {};
     const p = pos(e);
     G.mouse = p; G.mouseIn = true;
     canvas.setPointerCapture(e.pointerId);
-    // 拿着手（摸头）点另一只猫 = 换成照顾她
-    if (Game.showScene && G.tool === 'pet' && Act.hitBody(G2, p.x, p.y) && !Act.hitBody(G, p.x, p.y)) {
+    // 拿着手 / 梳子点另一只猫：点到哪只就是在摸 / 梳哪只——先换成她，这一下直接落在她身上
+    if (Game.showScene && (G.tool === 'pet' || G.tool === 'brush') && Act.hitBody(G2, p.x, p.y) && !Act.hitBody(G, p.x, p.y)) {
       UI.chooseCat(G2.catId);
-      return;
     }
     // 点墙上的照片：给照片里那只猫换下一套装扮；照片晃一晃、冒爱心，那只猫会接一句话
     const ph = Game.showScene && G.tool !== 'wand' ? D.Scene.hitPhoto(G.L, p.x, p.y) : null;
@@ -155,6 +154,16 @@ window.DOLL = window.DOLL || {};
       FX.toast('Outfit: ' + UI.cycleAcc(ph.id), Math.max(30, ph.x + ph.w / 2), ph.y + ph.h + 6, D.CATS[ph.id].tagColor);
       FX.spawn('heart', ph.x + ph.w / 2, ph.y + 6, { n: 4, spread: 7, vy: -11, life: 1.3 });
       FX.say(U.pick(PHOTO_LINES[ph.id]), { dur: 2.2, cat: ph.id });
+      return;
+    }
+    // 点吊灯：开 / 关
+    if (Game.showScene && G.tool !== 'wand' && D.Scene.hitLamp(G.L, p.x, p.y)) { UI.toggleLamp(); return; }
+    // 点窗户（没点到猫身上）：换窗外的风景，山脉 → 高楼 → 村落
+    if (Game.showScene && G.tool !== 'wand' && D.Scene.hitWindow(G.L, p.x, p.y) &&
+        !Act.hitBody(G, p.x, p.y) && !Act.hitBody(G2, p.x, p.y)) {
+      const w = G.L.win;
+      FX.toast('View: ' + D.Scene.nextView(), w.x + w.w / 2, w.y + w.h / 2, '#FFFFFF');
+      St.save();
       return;
     }
     Act.onDown(G, p.x, p.y);
@@ -171,6 +180,9 @@ window.DOLL = window.DOLL || {};
 
   window.addEventListener('keydown', (e) => {
     if (e.repeat) return;
+    // 在输入框里打字（填 ID / 密码）时不触发工具快捷键
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
     const k = e.key.toLowerCase();
     const map = { p: 'pet', f: 'feed', w: 'water', b: 'brush', l: 'litter', t: 'wand' };
     const nums = { '1': 'pet', '2': 'feed', '3': 'brush', '4': 'litter', '5': 'wand', '6': 'water' };
@@ -192,6 +204,7 @@ window.DOLL = window.DOLL || {};
     G.t += dt;
 
     St.tick(dt);
+    if (D.Account) D.Account.tick(dt);
     G.sinceTouch += dt;
     G.sinceLitter += dt;
     const c = St.cur();
@@ -269,7 +282,17 @@ window.DOLL = window.DOLL || {};
       PX.dither(ctx, 0, L.floorY, L.W, 3, sky.night ? '#413A52' : '#F2E2D2', 0);
     }
 
-    const night = D.Scene.skyOf(hour).night;
+    // 天黑下来的那一刻灯自动打开，天亮的那一刻自动关上；中间手动开关过就听手动的，直到下一次昼夜交替
+    if (showScene) {
+      const phase = D.Scene.skyOf(hour).night ? 'night' : 'day';
+      if (St.settings.lampPhase !== phase) {
+        St.settings.lampPhase = phase;
+        St.settings.lamp = phase === 'night';
+        St.save();
+      }
+    }
+    // 屋里暗不暗：外面是晚上、而且没开灯
+    const night =D.Scene.skyOf(hour).night && !D.Scene.lampOn();
     // 地板是个平面：家具和猫按「站在地板上的深度」从后往前画，
     // 靠前的挡住靠后的（猫走到跑轮前面就挡住跑轮，走到后面就被跑轮挡住）。
     // 在爬架 / 窗台上、正在跳的猫最后画（它们在半空，不跟地上的东西比前后）。
@@ -298,6 +321,10 @@ window.DOLL = window.DOLL || {};
     }
     items.sort((a, b) => a.k - b.k);
     for (const it of items) it.f();
+    // 晚上没开灯：连猫和家具一起压暗
+    // 天色越晚压得越暗：傍晚开始慢慢变暗，入夜后最暗；一开灯就亮回来
+    const dusk = D.Scene.lampOn() ? 0 : U.clamp(D.Scene.skyOf(hour).star / 0.55, 0, 1);
+    if (showScene && dusk > 0) { ctx.fillStyle = 'rgba(14,10,36,' + (0.5 * dusk).toFixed(3) + ')'; ctx.fillRect(0, 0, L.W, L.H); }
 
     FX.draw(ctx);
     Act.drawCursor(ctx, G);
@@ -358,9 +385,10 @@ window.DOLL = window.DOLL || {};
       else if (c.mood > 75 && U.chance(.2)) FX.say(AI.line(G, 'happy'));
     }, 26000);
 
-    window.addEventListener('beforeunload', () => St.save());
+    const saveAll = () => { St.save(); if (D.Account) D.Account.save(); };
+    window.addEventListener('beforeunload', saveAll);
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) St.save(); else last = performance.now();
+      if (document.hidden) saveAll(); else last = performance.now();
     });
 
     requestAnimationFrame(frame);
