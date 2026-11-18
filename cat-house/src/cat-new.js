@@ -44,10 +44,10 @@ window.DOLL = window.DOLL || {};
     'oaaaaaaaawww',
     'oaaaaaaawwww',
     'owaaaaawwwpp',
-    'owwaarrcwwwp',
-    'owwwwwcwwwwo',
-    '.owwwwcwwwow',
-    '..oowwwcccww',
+    'owwaarrwwwwp',
+    'owwwwwwwwwwo',
+    '.owwwwwwwwow',
+    '..oowwwwwwww',
     '....oowwwwww',
     '......oooooo'
   ];
@@ -159,6 +159,7 @@ window.DOLL = window.DOLL || {};
   const WHISKER_L = ['hh...', '..hhh', '..hhh', 'hh...'];
   const WHISKER_R = WHISKER_L.map(rev);
 
+  let curCat = 'luna';     // 正在生成哪只猫的精灵（get() 里设）：两只猫的嘴不一样
   function head(m) {
     const rows = HEAD.slice();
     const eye = EYES[m] || EYES.open;
@@ -167,10 +168,26 @@ window.DOLL = window.DOLL || {};
       for (let j = 0; j < 7; j++) if (eye[i][j] !== '.') r[2 + j] = eye[i][j];
       rows[4 + i] = r.join('');
     }
+    // 嘴就是鼻子底下那几格深色（外面不再画浅色的嘴套线，白白净净的下半张脸上只有这张小嘴）。
+    // 两只猫按性格画得不一样：
+    //   Luna 是「不高兴」：从鼻子底下往两边斜着落下去，一个朝下的尖角「∧」（就是 HEAD 里画的这个）；
+    //   Nova 是「没头脑」：落下去以后嘴角再往上翘一格，是个「ω」
+    if (curCat === 'nova') {
+      // 宽 8 格（比鼻子两边各宽出两格）：两边的弧底各两格宽，嘴角翘在最外侧。太窄的话上翘的嘴挤成一团，看着怪
+      rows[12] = rows[12].slice(0, 8) + 'owwo';
+      rows[13] = rows[13].slice(0, 9) + 'oow';
+    }
     if (m === 'win') {
-      // 得意脸再张开嘴：嘴里一点粉
-      rows[12] = rows[12].slice(0, 10) + 'op';
-      rows[13] = rows[13].slice(0, 10) + 'oo';
+      // 得意脸张开嘴。猫张嘴是下巴往下掉：上面那道嘴线（∧ / ω）原样不动，嘴是从它底下张开的——
+      // 嘴线正下方露出一小块粉色的口腔，再往下一道下唇把它兜住
+      if (curCat === 'nova') {
+        rows[13] = rows[13].slice(0, 11) + 'p';
+        rows[14] = rows[14].slice(0, 10) + 'op';
+        rows[15] = rows[15].slice(0, 11) + 'o';
+      } else {
+        rows[13] = rows[13].slice(0, 11) + 'p';
+        rows[14] = rows[14].slice(0, 11) + 'o';
+      }
     }
     return mirror(rows);
   }
@@ -501,6 +518,7 @@ window.DOLL = window.DOLL || {};
     const key = [catId, pose, mood, acc, frame, low ? 1 : 0].join('|');
     let it = cache.get(key);
     if (it) return it;
+    curCat = catId;
     it = build(pose, mood, acc, frame, low);
     const pal = PAL[catId] || PAL.luna;
     const cv = document.createElement('canvas');

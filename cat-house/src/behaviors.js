@@ -988,11 +988,12 @@ window.DOLL = window.DOLL || {};
           say(G, U.pick(['Go go go!', 'Running~', "Can't stop!"]), { dur: 1.8 });
         }
       } else if (G.wheelPhase === 'run') {
-        // 原地跑：腿按跑步的节奏动，轮子往反方向转
+        // 原地跑：腿按跑步的节奏动。猫的脚把脚下那段跑道往身后蹬，所以轮子最底下是往猫身后走的：
+        // 猫朝右跑 → 底下往左 → 轮子在屏幕上顺时针转（角度是按屏幕坐标算的，y 朝下，角度变大就是顺时针）
         G.x = W.x; G.y = W.runY; G.facing = G.runDir; G.spr = 'stand';
         G.gait = 'run'; G.gaitHold = 0.15;
         G.gaitPhase = (G.gaitPhase || 0) + dt * 2.6;
-        D.Game.wheel.speed = -G.runDir * 5.5;
+        D.Game.wheel.speed = G.runDir * 5.5;
         const c = cs(G);
         c.energy = U.clamp(c.energy - 1.2 * dt, 0, 100);
         c.mood = U.clamp(c.mood + 0.6 * dt, 0, 100);
@@ -1263,7 +1264,8 @@ window.DOLL = window.DOLL || {};
       if (G.treatPhase === 'eat') {
         G.walking = false; G.spr = 'eat';
         G.eatT -= dt;
-        if (U.chance(dt * 7)) FX.spawn('crumb', G.x + 14 * G.facing, G.y - 3, { vy: -8, g: 36, life: .5 });
+        // 掉的渣是小鱼饼干自己的黄色
+        if (U.chance(dt * 7)) FX.spawn('crumb', G.x + 14 * G.facing, G.y - 3, { vy: -8, g: 36, life: .5, color: U.chance(.5) ? '#F4C55C' : '#D99C3A' });
         if (G.eatT <= 0) {
           G.treatN = (G.treatN || 0) + 1;
           cs(G).mood = U.clamp(cs(G).mood + 5, 0, 100);

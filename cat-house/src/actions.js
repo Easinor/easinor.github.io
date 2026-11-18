@@ -341,6 +341,10 @@ window.DOLL = window.DOLL || {};
       PX.rect(ctx, x + 1, y - 6 + d, 2, 5, '#F6D8C0');
       PX.rect(ctx, x + 4, y - 4 + d, 2, 4, '#F6D8C0');
       PX.rect(ctx, x - 4, y - 1 + d, 8, 4, '#F6D8C0');
+      // 大拇指：从手掌左侧往外斜着伸出去（上面那四根是食指到小指）
+      PX.rect(ctx, x - 8, y - 1 + d, 2, 3, '#F6D8C0');
+      PX.rect(ctx, x - 7, y + 1 + d, 2, 2, '#F6D8C0');
+      PX.rect(ctx, x - 6, y + 2 + d, 1, 2, '#E7B993');
     }
   };
 

@@ -179,31 +179,82 @@ window.DOLL = window.DOLL || {};
     ctx.drawImage(mountain.cv, w.x, w.y);
   }
 
-  // 高楼大厦：前后两排楼。白天窗户只是玻璃、一动不动；只有晚上才亮灯，
-  // 而且每隔 3–5 秒用随机数挑一扇窗，开着的关掉、关着的打开
-  const city = { key: '', layers: [], wins: [], next: 0 };
+  // 高楼大厦：照着纽约曼哈顿的天际线画，前后三层。
+  //   远处：一排淡淡的楼影；
+  //   中间：几栋认得出来的楼——克莱斯勒大厦（一层层收上去的尖冠 + 细针）、帝国大厦（层层往里收的台阶 + 尖顶）、
+  //         一栋又细又高的住宅楼、世贸一号楼（越往上越窄的玻璃塔 + 天线），中间用带退台的普通高楼填满；
+  //   近处：一排深色的矮楼，楼顶上是纽约特有的木头水塔。
+  // 白天窗户只是玻璃、一动不动；只有晚上才亮灯，而且每隔 3–5 秒用随机数挑一扇窗，开着的关掉、关着的打开。
+  // 晚上尖顶上有一闪一闪的红色航空灯；帝国大厦和克莱斯勒的楼冠和楼身一样是深色的，只是那几层的窗一直亮着（偏白的暖光）。
+  // 每栋楼 = 几个摞起来的方块 rects: [左边 x, 顶离地多高, 宽, 高, 种类]（种类：0 楼身 / 1 楼冠 / 2 水塔 / 3 天线）
+  const city = { key: '', layers: [], wins: [], beacons: [], next: 0 };
   function buildCity(w) {
-    city.layers = []; city.wins = [];
-    const defs = [{ seed: 11, lo: 0.40, hi: 0.80, p: 0.30 }, { seed: 47, lo: 0.18, hi: 0.55, p: 0.42 }];
-    for (const d of defs) {
-      const list = [];
-      let x = -3, k = 0;
-      while (x < w.w) {
-        const bw = 7 + Math.floor(U.hash(d.seed + k * 1.3) * 7);
-        const bh = Math.round((d.lo + U.hash(d.seed + k * 2.7) * (d.hi - d.lo)) * w.h);
-        const b = { x: x, w: bw, h: bh, mast: U.hash(d.seed + k * 5.1) > 0.7, wins: [] };
-        for (let yy = 2; yy < bh - 1; yy += 3) {
-          for (let xx = 1; xx < bw - 1; xx += 2) {
+    const W = w.w, H = w.h;
+    city.layers = [[], [], []]; city.wins = []; city.beacons = [];
+    // 摞方块：tiers = [[宽, 从多高, 到多高（占这栋楼总高的比例）, 种类]…]，都以 cx 为中线
+    const tower = (layer, cx, total, tiers, p, seed) => {
+      const b = { rects: [], wins: [] };
+      for (const t of tiers) {
+        const y0 = Math.round(total * t[1]), y1 = Math.round(total * t[2]);
+        if (y1 <= y0) continue;
+        const x = Math.round(cx - t[0] / 2);
+        b.rects.push([x, y1, t[0], y1 - y0, t[3] || 0]);
+        if (t[3] === 3 || t[0] < 3) continue;               // 天线、细针上没有窗
+        for (let yy = y0 + 2; yy < y1; yy += 3) {
+          for (let xx = x + 1; xx < x + t[0] - 1; xx += 2) {
             // glass：白天这一格画不画成浅色玻璃（固定）；lit：晚上这扇窗现在亮不亮（会变）
-            const win = { x: x + xx, dy: bh - yy, glass: U.hash(d.seed + k * 9.3 + yy * 3.7 + xx * 1.9) < 0.5, lit: Math.random() < d.p };
-            b.wins.push(win); city.wins.push(win);
+            // 楼冠（种类 1）上的窗晚上一直亮着，不参加随机开关
+            const top = t[3] === 1;
+            const win = { x: xx, dy: yy, glass: U.hash(seed + xx * 1.9 + yy * 3.7) < 0.55, lit: top || Math.random() < p, top: top };
+            b.wins.push(win);
+            if (!top) city.wins.push(win);
           }
         }
-        list.push(b);
-        x += bw + (U.hash(d.seed + k * 3.3) > 0.6 ? 1 : 0);
-        k++;
       }
-      city.layers.push(list);
+      city.layers[layer].push(b);
+      return b;
+    };
+    const beacon = (cx, h) => city.beacons.push({ x: Math.round(cx - 0.5), dy: h, ph: city.beacons.length * 1.7 });
+
+    // 远处的楼影：矮一些、挨得紧
+    for (let x = -2, k = 0; x < W; k++) {
+      const bw = 5 + Math.floor(U.hash(11 + k * 1.3) * 6);
+      tower(0, x + bw / 2, Math.round((0.22 + U.hash(11 + k * 2.7) * 0.26) * H), [[bw, 0, 1]], 0.22, 11 + k * 9.3);
+      x += bw;
+    }
+    // 中间：先用带退台的普通高楼把空填上，再把几栋地标立在前面
+    for (let x = -3, k = 0; x < W; k++) {
+      const bw = 7 + Math.floor(U.hash(47 + k * 1.3) * 6);
+      const hh = Math.round((0.30 + U.hash(47 + k * 2.7) * 0.24) * H);
+      const step = U.hash(47 + k * 5.1) > 0.45;
+      tower(1, x + bw / 2, hh, step ? [[bw, 0, 0.78], [Math.max(3, bw - 4), 0.78, 1]] : [[bw, 0, 1]], 0.34, 47 + k * 9.3);
+      x += bw + (U.hash(47 + k * 3.3) > 0.6 ? 1 : 0);
+    }
+    const hC = Math.round(H * 0.74), hE = Math.round(H * 0.88), hS = Math.round(H * 0.70), hW = Math.round(H * 0.80);
+    // 克莱斯勒大厦
+    const xC = W * 0.15;
+    tower(1, xC, hC, [[9, 0, 0.60], [7, 0.60, 0.68], [7, 0.68, 0.73, 1], [5, 0.73, 0.79, 1], [3, 0.79, 0.85, 1], [1, 0.85, 1, 3]], 0.42, 201);
+    beacon(xC, hC);
+    // 帝国大厦
+    const xE = W * 0.40;
+    tower(1, xE, hE, [[13, 0, 0.48], [11, 0.48, 0.60], [9, 0.60, 0.72], [5, 0.72, 0.82, 1], [3, 0.82, 0.88, 1], [1, 0.88, 1, 3]], 0.42, 301);
+    beacon(xE, hE);
+    // 细高的住宅楼
+    tower(1, W * 0.61, hS, [[4, 0, 1]], 0.45, 401);
+    // 世贸一号楼
+    const xW = W * 0.82;
+    tower(1, xW, hW, [[9, 0, 0.34], [7, 0.34, 0.66], [5, 0.66, 0.84], [1, 0.84, 1, 3]], 0.42, 501);
+    beacon(xW, hW);
+    // 近处的矮楼：楼顶隔一栋有一个木水塔（两条细腿 + 圆桶 + 尖盖）
+    for (let x = -4, k = 0; x < W; k++) {
+      const bw = 9 + Math.floor(U.hash(83 + k * 1.3) * 7);
+      const hh = Math.round((0.12 + U.hash(83 + k * 2.7) * 0.14) * H);
+      const b = tower(2, x + bw / 2, hh, [[bw, 0, 1]], 0.4, 83 + k * 9.3);
+      if (U.hash(83 + k * 4.4) > 0.4) {
+        const tx = x + 2 + Math.floor(U.hash(83 + k * 6.1) * Math.max(1, bw - 6));
+        b.rects.push([tx, hh + 2, 1, 2, 3], [tx + 2, hh + 2, 1, 2, 3], [tx, hh + 5, 3, 3, 2], [tx + 1, hh + 6, 1, 1, 2]);
+      }
+      x += bw;
     }
   }
   function viewCity(ctx, w, t, N) {
@@ -215,20 +266,28 @@ window.DOLL = window.DOLL || {};
       pick.lit = !pick.lit;
       city.next = t + U.rnd(3, 5);
     }
+    // 每一层：楼身、楼身左侧的一道亮边、窗（白天是玻璃 / 晚上是灯）、楼冠、水塔。
+    // 晚上越近的一层越黑：远处的楼影比夜空亮一点（城市的光晕），中间的地标比夜空暗，剪影才看得出形状
     const cols = [
-      { wall: N ? '#262E50' : '#A9B9D2', win: N ? '#E3BE62' : '#C6D6EA' },
-      { wall: N ? '#181E3A' : '#7388A6', win: N ? '#FFD97A' : '#A3B7D2' }
+      { wall: N ? '#2A3358' : '#C2CFE2', edge: N ? '#2A3358' : '#CEDAEA', win: N ? '#C9A85A' : '#D6E1F0', crown: N ? '#2A3358' : '#C2CFE2', tank: '#000' },
+      { wall: N ? '#151B3C' : '#8EA2C2', edge: N ? '#1F2750' : '#A3B5D0', win: N ? '#FFD97A' : '#BFD0E6', crown: N ? '#151B3C' : '#A9B9D2', tank: '#000' },
+      { wall: N ? '#0D1228' : '#63779A', edge: N ? '#141A36' : '#748AAD', win: N ? '#FFC864' : '#9FB4D0', crown: N ? '#0D1228' : '#63779A', tank: N ? '#2A2230' : '#8A6A54' }
     ];
     city.layers.forEach((list, li) => {
       const c = cols[li];
       for (const b of list) {
-        PX.rect(ctx, w.x + b.x, base - b.h, b.w, b.h, c.wall);
-        if (b.mast) PX.rect(ctx, w.x + b.x + (b.w >> 1), base - b.h - 4, 1, 4, c.wall);
+        for (const r of b.rects) {
+          const col = r[4] === 1 ? c.crown : r[4] === 2 ? c.tank : c.wall;
+          PX.rect(ctx, w.x + r[0], base - r[1], r[2], r[3], col);
+          if (r[4] === 0 && r[2] >= 4) PX.rect(ctx, w.x + r[0], base - r[1], 1, r[3], c.edge);
+        }
         for (const win of b.wins) {
-          if (N ? win.lit : win.glass) PX.rect(ctx, w.x + win.x, base - win.dy, 1, 1, c.win);
+          if (N ? win.lit : win.glass) PX.rect(ctx, w.x + win.x, base - win.dy, 1, 1, N && win.top ? '#FFF2C4' : c.win);
         }
       }
     });
+    // 尖顶上的红色航空灯：晚上一闪一闪
+    if (N) for (const bc of city.beacons) if (Math.sin(t * 2.4 + bc.ph) > 0.2) PX.rect(ctx, w.x + bc.x, base - bc.dy, 1, 1, '#FF5A5A');
   }
 
   // 村落（晚上窗户亮着、烟囱冒烟）
@@ -668,8 +727,7 @@ window.DOLL = window.DOLL || {};
     R(0, -24, 1, 21, padL); R(27, -24, 1, 21, padD);
     PX.ellipse(ctx, x + 9, base - 10, 6, 6, padL); R(3, -10, 13, 7, padL);
     PX.ellipse(ctx, x + 9, base - 10, 5, 5, hole); R(4, -10, 11, 7, hole);
-    R(18, -17, 2, 2, padD); R(21, -18, 2, 2, padD); R(24, -17, 2, 2, padD);
-    R(19, -14, 6, 3, padD); R(20, -11, 4, 1, padD);
+    PX.stamp(ctx, TREAT, x + 17, base - 19, { a: padD, h: padD, b: padD });   // 爪印：四颗脚趾排成弧 + 大肉垫（和零食那块猫爪饼干同一个图）
     // 第一层：猫屋的屋顶（落脚点 0）
     plat(-2, -27, 32);
     // 第二层：左边的跳板（落脚点 1）
@@ -894,23 +952,34 @@ window.DOLL = window.DOLL || {};
     return !!b && Math.abs(x - b.x) <= 33 && y >= b.y - 17 && y <= b.y + 1;
   };
 
-  // 零食：一条小鱼饼干。飞在半空的时候地上有个小影子
+  // 猫爪印（9×8）：四颗圆圆的脚趾排成一道弧（中间两颗高、外侧两颗低），底下一块上窄下宽、圆乎乎的大肉垫，
+  // 脚趾和肉垫之间留一格缝。猫爬架的猫屋上印的就是它
+  const TREAT = [
+    '..aa.aa..',
+    '..aa.aa..',
+    'aa.....aa',
+    'aa.aaa.aa',
+    '..ahaaa..',
+    '.ahaaaaa.',
+    '.aaaaaab.',
+    '..aaabb..'
+  ];
+  // 零食：一条黄色的小鱼饼干（圆身子、右边一个分叉的尾巴、一只小黑眼睛）。飞在半空的时候地上有个小影子
   S.drawTreat = function (ctx, tr, night) {
     const x = Math.round(tr.x), y = Math.round(tr.y - (tr.z || 0));
     if (tr.z > 1) PX.ellipse(ctx, x, Math.round(tr.y), 3, 1, 'rgba(60,44,66,.2)');
-    const a = C(night, '#F2A65A'), b = C(night, '#D9823A');
+    const a = C(night, '#F4C55C'), b = C(night, '#D99C3A');
     PX.rect(ctx, x - 3, y - 2, 5, 3, a);
     PX.rect(ctx, x - 2, y - 3, 3, 1, a); PX.rect(ctx, x - 2, y + 1, 3, 1, b);
     PX.rect(ctx, x + 2, y - 3, 2, 2, b); PX.rect(ctx, x + 2, y, 2, 2, b);   // 尾巴
     PX.rect(ctx, x - 2, y - 2, 1, 1, '#4A3020');
   };
 
-  // 小爪印（猫砂垫、碗架上用）
+  // 小爪印（砂盆脚垫、餐垫、猫窝、纸箱上用，5×4）：四颗脚趾排成弧——中间两颗高、外侧两颗低——底下一块肉垫
   function paw(ctx, x, y, col) {
     PX.rect(ctx, x, y + 1, 3, 2, col);
-    PX.rect(ctx, x - 1, y - 1, 1, 1, col);
-    PX.rect(ctx, x + 1, y - 2, 1, 1, col);
-    PX.rect(ctx, x + 3, y - 1, 1, 1, col);
+    PX.rect(ctx, x, y - 1, 1, 1, col); PX.rect(ctx, x + 2, y - 1, 1, 1, col);
+    PX.rect(ctx, x - 1, y, 1, 1, col); PX.rect(ctx, x + 3, y, 1, 1, col);
   }
 
   // 猫砂盆：猫头形状的高靠背（耳朵、眯眼、粉鼻子）+ 托盘 + 前面一块爪印脚垫 + 靠着的小铲子
@@ -1010,11 +1079,11 @@ window.DOLL = window.DOLL || {};
   };
 
   // ---------- 整体 ----------
-  // 墙上的两张拍立得：胶带贴着、一高一低。鼠标移上去会笑，点一下会晃、挤眼、冒爱心
+  // 墙上的两张拍立得：胶带贴着、一高一低。鼠标移上去只是微微歪一下，表情不变；点下去才换表情、晃一晃、冒爱心
   const PHOTOS = [
     // rot = 贴歪的角度（弧度）；idle / hover / poke = 平时、鼠标移上去、被点时的表情
     { id: 'luna', bg: '#CFE3F6', bgN: '#6F7BA0', dot: '#FFFFFF', tape: '#F6B8C6', heart: '#8FA3D8', dy: 0, rot: -0.12, idle: 'meh', hover: 'meh', poke: 'sleep' },
-    { id: 'nova', bg: '#FDE2CC', bgN: '#9A7A80', dot: '#FFFFFF', tape: '#A9D8C2', heart: '#F0A070', dy: 4, rot: 0.14, idle: 'happy', hover: 'win', poke: 'win' }
+    { id: 'nova', bg: '#FDE2CC', bgN: '#9A7A80', dot: '#FFFFFF', tape: '#A9D8C2', heart: '#F0A070', dy: 4, rot: 0.14, idle: 'happy', hover: 'happy', poke: 'win' }
   ];
   const photoState = { luna: { poke: -99 }, nova: { poke: -99 } };
   let sceneT = 0;
